@@ -13,6 +13,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 import json
 import os
+import re
 import requests
 import xml.etree.ElementTree as ET
 import html
@@ -31,7 +32,7 @@ load_dotenv()
 
 app = FastAPI(
     title="BIST Katilim Terminal API",
-    version="19.0.0",
+    version="19.1.0",
     description="V7.2 frozen strategy + automatic paper scan + notification queue"
 )
 
@@ -109,7 +110,7 @@ def now_utc_iso():
 
 def default_state():
     return {
-        "version": "19.0.0",
+        "version": "19.1.0",
         "started_at": now_utc_iso(),
         "strategy": "V7.2_FROZEN",
         "symbols": PAPER_SYMBOLS,
@@ -1441,7 +1442,7 @@ def root():
     return {
         "status": "ok",
         "name": "BIST Katilim Terminal",
-        "version": "19.0.0",
+        "version": "19.1.0",
         "strategy": "V7.2_FROZEN",
         "paper_symbols": PAPER_SYMBOLS,
         "paper_universe_count": len(PAPER_SYMBOLS),
@@ -1462,7 +1463,7 @@ def root():
 def health():
     return {
         "status": "healthy",
-        "version": "19.0.0",
+        "version": "19.1.0",
         "scheduler_running": scheduler.running,
     }
 
