@@ -3538,3 +3538,350 @@ footer{
   .news-summary-v25{grid-template-columns:1fr 1fr}
   .news-summary-v25 .news-kap-card{grid-column:1/-1}
 }
+
+
+/* ===== FRONTEND V26 - RESPONSIVE MOBILE LAYOUT ===== */
+.mobile-top-actions,
+.mobile-overlay {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  html, body {
+    overflow-x: hidden;
+    width: 100%;
+  }
+
+  body {
+    min-width: 0 !important;
+  }
+
+  /* Desktop sidebar/nav disappear only on phones */
+  .sidebar,
+  .left-sidebar,
+  .watchlist-sidebar,
+  .top-nav {
+    display: none !important;
+  }
+
+  .mobile-top-actions {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+
+  .mobile-menu-btn,
+  .mobile-stocks-btn {
+    min-height: 36px;
+    padding: 0 10px;
+    border: 1px solid #21445c;
+    border-radius: 7px;
+    background: #082235;
+    color: #dce8ef;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .mobile-menu-btn {
+    width: 40px;
+    padding: 0;
+    font-size: 17px;
+  }
+
+  /* Main shell takes the full phone width */
+  .app-shell,
+  .app-root,
+  .terminal-shell,
+  .main-shell,
+  .main-content,
+  .content,
+  .content-area,
+  .page-content {
+    margin-left: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .main-content,
+  .content,
+  .content-area,
+  .page-content {
+    padding-left: 9px !important;
+    padding-right: 9px !important;
+  }
+
+  .topbar,
+  .top-bar,
+  header {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  /* Dashboard blocks */
+  .dashboard-grid,
+  .home-grid,
+  .analysis-grid,
+  .market-grid,
+  .summary-grid,
+  .news-summary,
+  .news-summary-v25,
+  .kap-news-grid,
+  .alert-status-grid,
+  .alert-settings-grid,
+  .alert-event-list,
+  .scanner-summary,
+  .paper-grid,
+  .performance-grid,
+  .cards-grid,
+  .stats-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .market-summary,
+  .top-stats,
+  .paper-stats,
+  .performance-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  /* Charts */
+  .chart-box,
+  .simple-price-chart,
+  .interactive-chart,
+  .candlestick-box,
+  .detail-chart-section,
+  .chart-wrap,
+  .chart-container {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .simple-price-chart {
+    min-height: 235px !important;
+    height: auto !important;
+    padding-bottom: 44px;
+  }
+
+  .interactive-chart {
+    min-height: 255px !important;
+  }
+
+  .right-panel,
+  .side-panel,
+  .analysis-side,
+  .support-panel,
+  .indicator-panel {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* Horizontal table scrolling instead of tiny unreadable text */
+  .scanner-table-card,
+  .performance-table,
+  .paper-history,
+  .table-wrap {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .scanner-table-head,
+  .scanner-row {
+    min-width: 980px !important;
+  }
+
+  /* Notification flyout fits phone */
+  .notifications-popover,
+  .notification-panel,
+  .notifications-panel {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: 68px !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: calc(100vh - 82px) !important;
+    overflow-y: auto !important;
+    z-index: 900 !important;
+  }
+
+  h1 {
+    font-size: 22px !important;
+  }
+
+  .scanner-head,
+  .news-head,
+  .alert-settings-head,
+  .paper-head,
+  .performance-head {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .paper-refresh {
+    width: 100% !important;
+  }
+
+  .chart-range-bar,
+  .detail-chart-head,
+  .toolbar,
+  .analysis-toolbar {
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+  }
+
+  .simple-chart-stats {
+    position: static !important;
+    margin-top: 6px !important;
+  }
+
+  .pwa-card {
+    grid-template-columns: 1fr !important;
+  }
+
+  .pwa-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  /* Drawers */
+  .mobile-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(1, 8, 14, .74);
+    backdrop-filter: blur(3px);
+    z-index: 1200;
+  }
+
+  .mobile-drawer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: min(88vw, 360px);
+    height: 100%;
+    background: #061725;
+    border-left: 1px solid #1d4057;
+    box-shadow: -16px 0 40px rgba(0,0,0,.35);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .mobile-drawer-head {
+    min-height: 72px;
+    padding: 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(45,80,103,.34);
+  }
+
+  .mobile-drawer-head b {
+    display: block;
+    font-size: 15px;
+  }
+
+  .mobile-drawer-head span {
+    display: block;
+    margin-top: 3px;
+    color: #7890a2;
+    font-size: 10px;
+  }
+
+  .mobile-drawer-head button {
+    width: 34px;
+    height: 34px;
+    border-radius: 7px;
+    border: 1px solid #21445c;
+    background: #0a2233;
+    color: #dbe7ee;
+    font-size: 16px;
+  }
+
+  .mobile-drawer-nav {
+    padding: 10px;
+    overflow-y: auto;
+  }
+
+  .mobile-drawer-nav button {
+    width: 100%;
+    min-height: 48px;
+    margin-bottom: 7px;
+    padding: 0 12px;
+    text-align: left;
+    border: 1px solid rgba(45,80,103,.38);
+    border-radius: 8px;
+    background: #071a29;
+    color: #dbe7ee;
+    font-size: 13px;
+  }
+
+  .mobile-stocks-drawer {
+    left: 0;
+    right: auto;
+    border-left: 0;
+    border-right: 1px solid #1d4057;
+  }
+
+  .mobile-stock-search {
+    padding: 10px;
+    border-bottom: 1px solid rgba(45,80,103,.28);
+  }
+
+  .mobile-stock-search input {
+    width: 100%;
+    height: 40px;
+    padding: 0 10px;
+    border: 1px solid #21445c;
+    border-radius: 7px;
+    background: #082235;
+    color: #e3ebf0;
+    outline: none;
+  }
+
+  .mobile-stock-list {
+    padding: 8px;
+    overflow-y: auto;
+  }
+
+  .mobile-stock-list button {
+    width: 100%;
+    min-height: 44px;
+    display: grid;
+    grid-template-columns: 70px 1fr 72px;
+    gap: 8px;
+    align-items: center;
+    padding: 0 9px;
+    margin-bottom: 4px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: #dbe7ee;
+    text-align: left;
+  }
+
+  .mobile-stock-list button.selected {
+    border-color: rgba(242,184,75,.35);
+    background: rgba(242,184,75,.07);
+  }
+
+  .mobile-stock-list button span,
+  .mobile-stock-list button em {
+    font-size: 11px;
+    font-style: normal;
+    text-align: right;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1100px) {
+  .dashboard-grid,
+  .home-grid,
+  .analysis-grid,
+  .kap-news-grid,
+  .alert-settings-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
