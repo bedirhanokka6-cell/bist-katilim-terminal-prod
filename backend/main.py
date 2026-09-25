@@ -27,7 +27,7 @@ load_dotenv()
 
 app = FastAPI(
     title="BIST Katilim Terminal API",
-    version="18.1.0",
+    version="18.2.0",
     description="V7.2 frozen strategy + automatic paper scan + notification queue"
 )
 
@@ -43,6 +43,7 @@ if extra_frontend_origin and extra_frontend_origin not in FRONTEND_ORIGINS:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=FRONTEND_ORIGINS,
+    allow_origin_regex=r"https://.*\\.vercel\\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -104,7 +105,7 @@ def now_utc_iso():
 
 def default_state():
     return {
-        "version": "18.1.0",
+        "version": "18.2.0",
         "started_at": now_utc_iso(),
         "strategy": "V7.2_FROZEN",
         "symbols": PAPER_SYMBOLS,
@@ -1299,7 +1300,7 @@ def root():
     return {
         "status": "ok",
         "name": "BIST Katilim Terminal",
-        "version": "18.1.0",
+        "version": "18.2.0",
         "strategy": "V7.2_FROZEN",
         "paper_symbols": PAPER_SYMBOLS,
         "paper_universe_count": len(PAPER_SYMBOLS),
@@ -1320,7 +1321,7 @@ def root():
 def health():
     return {
         "status": "healthy",
-        "version": "18.1.0",
+        "version": "18.2.0",
         "scheduler_running": scheduler.running,
     }
 
