@@ -792,6 +792,15 @@ export default function Home() {
       <section className="main-area">
         <header className="topbar">
           <div className="search-wide">⌕ <span>Hisse ara... (örn. TUPRS)</span></div>
+          <div className="mobile-top-actions">
+            <button className="mobile-stocks-btn" onClick={() => setMobileStocksOpen(true)}>
+              ☷ Hisseler
+            </button>
+            <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(true)}>
+              ☰
+            </button>
+          </div>
+
           <nav className="main-nav">
             <button
               className={mainView === "home" ? "active" : ""}
@@ -2106,6 +2115,74 @@ export default function Home() {
           />
         )}
       </section>
+
+      {mobileMenuOpen && (
+        <div className="mobile-overlay" onClick={() => setMobileMenuOpen(false)}>
+          <aside className="mobile-drawer mobile-menu-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-drawer-head">
+              <div>
+                <b>BIST Katılım Terminal</b>
+                <span>Mobil Menü</span>
+              </div>
+              <button onClick={() => setMobileMenuOpen(false)}>✕</button>
+            </div>
+            <div className="mobile-drawer-nav">
+              <button onClick={() => { setMainView("home"); setMobileMenuOpen(false); }}>⌂ Ana Sayfa</button>
+              <button onClick={() => { setMainView("scanner"); setMobileMenuOpen(false); }}>⚡ Güçlü Adaylar</button>
+              <button onClick={() => { setMainView("home"); setAnalysisTab("chart"); setMobileMenuOpen(false); }}>▦ Analiz</button>
+              <button onClick={() => { setMainView("paper"); setMobileMenuOpen(false); }}>→ Paper Trading</button>
+              <button onClick={() => { setMainView("performance"); setMobileMenuOpen(false); }}>▤ Performans</button>
+              <button onClick={() => { setMainView("news"); setMobileMenuOpen(false); }}>▣ KAP / Haberler</button>
+              <button onClick={() => { setMainView("candles"); setMobileMenuOpen(false); }}>▥ Mum Analizi</button>
+              <button onClick={() => { setMainView("settings"); setMobileMenuOpen(false); }}>⚙ Ayarlar</button>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {mobileStocksOpen && (
+        <div className="mobile-overlay" onClick={() => setMobileStocksOpen(false)}>
+          <aside className="mobile-drawer mobile-stocks-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-drawer-head">
+              <div>
+                <b>BIST Katılım 50</b>
+                <span>Hisse seç</span>
+              </div>
+              <button onClick={() => setMobileStocksOpen(false)}>✕</button>
+            </div>
+            <div className="mobile-stock-search">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Hisse ara..."
+              />
+            </div>
+            <div className="mobile-stock-list">
+              {filteredStocks.map((item) => {
+                const pos = item.daily_change_pct >= 0;
+                return (
+                  <button
+                    key={item.symbol}
+                    className={selected === item.symbol ? "selected" : ""}
+                    onClick={() => {
+                      setSelected(item.symbol);
+                      setMainView("home");
+                      setMobileStocksOpen(false);
+                    }}
+                  >
+                    <b>{item.symbol}</b>
+                    <span>{item.last_price.toLocaleString("tr-TR", { maximumFractionDigits: 2 })}</span>
+                    <em className={pos ? "paper-pos" : "paper-neg"}>
+                      {fmtPct(item.daily_change_pct)}
+                    </em>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+        </div>
+      )}
+
     </main>
   );
 }
@@ -2312,74 +2389,6 @@ function AlertSettingsView({
         </span>
       </div>
     </section>
-      {mobileMenuOpen && (
-        <div className="mobile-overlay" onClick={() => setMobileMenuOpen(false)}>
-          <aside className="mobile-drawer mobile-menu-drawer" onClick={(e) => e.stopPropagation()}>
-            <div className="mobile-drawer-head">
-              <div>
-                <b>BIST Katılım Terminal</b>
-                <span>Mobil Menü</span>
-              </div>
-              <button onClick={() => setMobileMenuOpen(false)} aria-label="Kapat">✕</button>
-            </div>
-
-            <div className="mobile-drawer-nav">
-              <button onClick={() => { setMainView("home"); setMobileMenuOpen(false); }}>⌂ Ana Sayfa</button>
-              <button onClick={() => { setMainView("scanner"); setMobileMenuOpen(false); }}>⚡ Güçlü Adaylar</button>
-              <button onClick={() => { setMainView("home"); setAnalysisTab("chart"); setMobileMenuOpen(false); }}>▦ Analiz</button>
-              <button onClick={() => { setMainView("paper"); setMobileMenuOpen(false); }}>→ Paper Trading</button>
-              <button onClick={() => { setMainView("performance"); setMobileMenuOpen(false); }}>▤ Performans</button>
-              <button onClick={() => { setMainView("news"); setMobileMenuOpen(false); }}>▣ KAP / Haberler</button>
-              <button onClick={() => { setMainView("candles"); setMobileMenuOpen(false); }}>▥ Mum Analizi</button>
-              <button onClick={() => { setMainView("settings"); setMobileMenuOpen(false); }}>⚙ Ayarlar</button>
-            </div>
-          </aside>
-        </div>
-      )}
-
-      {mobileStocksOpen && (
-        <div className="mobile-overlay" onClick={() => setMobileStocksOpen(false)}>
-          <aside className="mobile-drawer mobile-stocks-drawer" onClick={(e) => e.stopPropagation()}>
-            <div className="mobile-drawer-head">
-              <div>
-                <b>BIST Katılım 50</b>
-                <span>Hisse seç</span>
-              </div>
-              <button onClick={() => setMobileStocksOpen(false)} aria-label="Kapat">✕</button>
-            </div>
-
-            <div className="mobile-stock-search">
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Hisse ara..."
-              />
-            </div>
-
-            <div className="mobile-stock-list">
-              {watchlist.map((item) => (
-                <button
-                  key={item.symbol}
-                  className={selected === item.symbol ? "selected" : ""}
-                  onClick={() => {
-                    setSelected(item.symbol);
-                    setMainView("home");
-                    setMobileStocksOpen(false);
-                  }}
-                >
-                  <b>{item.symbol}</b>
-                  <span>{item.price?.toFixed?.(2) ?? "—"}</span>
-                  <em className={(item.daily_change_pct ?? 0) >= 0 ? "paper-pos" : "paper-neg"}>
-                    {(item.daily_change_pct ?? 0) >= 0 ? "+" : ""}
-                    {(item.daily_change_pct ?? 0).toFixed?.(2) ?? "0.00"}%
-                  </em>
-                </button>
-              ))}
-            </div>
-          </aside>
-        </div>
-      )}
-
   );
 }
 

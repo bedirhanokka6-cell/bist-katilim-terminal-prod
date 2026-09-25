@@ -3540,7 +3540,7 @@ footer{
 }
 
 
-/* ===== FRONTEND V26 - RESPONSIVE MOBILE LAYOUT ===== */
+/* ===== FRONTEND V26.1 - RESPONSIVE MOBILE ===== */
 .mobile-top-actions,
 .mobile-overlay {
   display: none;
@@ -3548,27 +3548,48 @@ footer{
 
 @media (max-width: 760px) {
   html, body {
-    overflow-x: hidden;
     width: 100%;
+    overflow-x: hidden;
   }
 
   body {
     min-width: 0 !important;
   }
 
-  /* Desktop sidebar/nav disappear only on phones */
-  .sidebar,
-  .left-sidebar,
-  .watchlist-sidebar,
-  .top-nav {
+  .terminal-shell {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .left-rail,
+  .main-nav {
     display: none !important;
   }
 
+  .main-area {
+    width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+  }
+
+  .topbar {
+    width: 100% !important;
+    min-width: 0 !important;
+    padding: 8px !important;
+    gap: 8px !important;
+  }
+
+  .search-wide {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    overflow: hidden;
+  }
+
   .mobile-top-actions {
-    display: flex;
+    display: flex !important;
     align-items: center;
     gap: 7px;
-    margin-left: auto;
     flex: 0 0 auto;
   }
 
@@ -3581,7 +3602,6 @@ footer{
     background: #082235;
     color: #dce8ef;
     font-size: 11px;
-    cursor: pointer;
   }
 
   .mobile-menu-btn {
@@ -3590,86 +3610,28 @@ footer{
     font-size: 17px;
   }
 
-  /* Main shell takes the full phone width */
-  .app-shell,
-  .app-root,
-  .terminal-shell,
-  .main-shell,
-  .main-content,
-  .content,
-  .content-area,
-  .page-content {
-    margin-left: 0 !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    min-width: 0 !important;
-  }
-
-  .main-content,
-  .content,
-  .content-area,
-  .page-content {
-    padding-left: 9px !important;
-    padding-right: 9px !important;
-  }
-
-  .topbar,
-  .top-bar,
-  header {
-    min-width: 0 !important;
-    max-width: 100% !important;
-  }
-
-  /* Dashboard blocks */
-  .dashboard-grid,
+  .market-cards,
   .home-grid,
   .analysis-grid,
-  .market-grid,
-  .summary-grid,
+  .paper-grid,
+  .performance-grid,
   .news-summary,
   .news-summary-v25,
   .kap-news-grid,
   .alert-status-grid,
   .alert-settings-grid,
   .alert-event-list,
-  .scanner-summary,
-  .paper-grid,
-  .performance-grid,
-  .cards-grid,
-  .stats-grid {
+  .scanner-summary {
     grid-template-columns: 1fr !important;
   }
 
-  .market-summary,
-  .top-stats,
-  .paper-stats,
-  .performance-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-
-  /* Charts */
   .chart-box,
   .simple-price-chart,
   .interactive-chart,
   .candlestick-box,
   .detail-chart-section,
   .chart-wrap,
-  .chart-container {
-    width: 100% !important;
-    max-width: 100% !important;
-    min-width: 0 !important;
-  }
-
-  .simple-price-chart {
-    min-height: 235px !important;
-    height: auto !important;
-    padding-bottom: 44px;
-  }
-
-  .interactive-chart {
-    min-height: 255px !important;
-  }
-
+  .chart-container,
   .right-panel,
   .side-panel,
   .analysis-side,
@@ -3677,9 +3639,9 @@ footer{
   .indicator-panel {
     width: 100% !important;
     max-width: 100% !important;
+    min-width: 0 !important;
   }
 
-  /* Horizontal table scrolling instead of tiny unreadable text */
   .scanner-table-card,
   .performance-table,
   .paper-history,
@@ -3693,7 +3655,6 @@ footer{
     min-width: 980px !important;
   }
 
-  /* Notification flyout fits phone */
   .notifications-popover,
   .notification-panel,
   .notifications-panel {
@@ -3708,46 +3669,6 @@ footer{
     z-index: 900 !important;
   }
 
-  h1 {
-    font-size: 22px !important;
-  }
-
-  .scanner-head,
-  .news-head,
-  .alert-settings-head,
-  .paper-head,
-  .performance-head {
-    flex-direction: column !important;
-    align-items: stretch !important;
-  }
-
-  .paper-refresh {
-    width: 100% !important;
-  }
-
-  .chart-range-bar,
-  .detail-chart-head,
-  .toolbar,
-  .analysis-toolbar {
-    flex-wrap: wrap !important;
-    gap: 6px !important;
-  }
-
-  .simple-chart-stats {
-    position: static !important;
-    margin-top: 6px !important;
-  }
-
-  .pwa-card {
-    grid-template-columns: 1fr !important;
-  }
-
-  .pwa-actions {
-    width: 100%;
-    flex-wrap: wrap;
-  }
-
-  /* Drawers */
   .mobile-overlay {
     display: block;
     position: fixed;
@@ -3763,11 +3684,18 @@ footer{
     right: 0;
     width: min(88vw, 360px);
     height: 100%;
+    display: flex;
+    flex-direction: column;
     background: #061725;
     border-left: 1px solid #1d4057;
     box-shadow: -16px 0 40px rgba(0,0,0,.35);
-    display: flex;
-    flex-direction: column;
+  }
+
+  .mobile-stocks-drawer {
+    left: 0;
+    right: auto;
+    border-left: 0;
+    border-right: 1px solid #1d4057;
   }
 
   .mobile-drawer-head {
@@ -3794,8 +3722,8 @@ footer{
   .mobile-drawer-head button {
     width: 34px;
     height: 34px;
-    border-radius: 7px;
     border: 1px solid #21445c;
+    border-radius: 7px;
     background: #0a2233;
     color: #dbe7ee;
     font-size: 16px;
@@ -3811,19 +3739,12 @@ footer{
     min-height: 48px;
     margin-bottom: 7px;
     padding: 0 12px;
-    text-align: left;
     border: 1px solid rgba(45,80,103,.38);
     border-radius: 8px;
     background: #071a29;
     color: #dbe7ee;
+    text-align: left;
     font-size: 13px;
-  }
-
-  .mobile-stocks-drawer {
-    left: 0;
-    right: auto;
-    border-left: 0;
-    border-right: 1px solid #1d4057;
   }
 
   .mobile-stock-search {
@@ -3839,7 +3760,6 @@ footer{
     border-radius: 7px;
     background: #082235;
     color: #e3ebf0;
-    outline: none;
   }
 
   .mobile-stock-list {
@@ -3873,15 +3793,5 @@ footer{
     font-size: 11px;
     font-style: normal;
     text-align: right;
-  }
-}
-
-@media (min-width: 761px) and (max-width: 1100px) {
-  .dashboard-grid,
-  .home-grid,
-  .analysis-grid,
-  .kap-news-grid,
-  .alert-settings-grid {
-    grid-template-columns: 1fr 1fr !important;
   }
 }
