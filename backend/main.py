@@ -32,8 +32,8 @@ load_dotenv()
 
 app = FastAPI(
     title="BIST Katilim Terminal API",
-    version="19.1.0",
-    description="V7.2 frozen strategy + automatic paper scan + notification queue"
+    version="20.0.0",
+    description="V7.2 frozen strategy + automatic paper scan + isolated paper test mode"
 )
 
 FRONTEND_ORIGINS = [
@@ -110,7 +110,7 @@ def now_utc_iso():
 
 def default_state():
     return {
-        "version": "19.1.0",
+        "version": "20.0.0",
         "started_at": now_utc_iso(),
         "strategy": "V7.2_FROZEN",
         "symbols": PAPER_SYMBOLS,
@@ -1463,7 +1463,7 @@ def root():
 def health():
     return {
         "status": "healthy",
-        "version": "19.1.0",
+        "version": "20.0.0",
         "scheduler_running": scheduler.running,
     }
 
@@ -1479,6 +1479,96 @@ def paper_scan(
         "timeframe": timeframe,
         "strategy": "V7.2_FROZEN",
         **result,
+    }
+
+
+@app.post("/paper/test-cycle")
+def paper_test_cycle(
+    symbol: str = Query("EREGL"),
+    entry_price: float = Query(50.0, gt=0),
+    outcome: str = Query("TARGET"),
+):
+    """
+    Isolated one-shot paper lifecycle test.
+
+    This endpoint NEVER writes to paper_state.json and NEVER changes real paper
+    positions, notifications, metrics, or scanner state. It only verifies the
+    entry -> stop/target -> close -> metric calculation path with the same
+    fee/slippage settings used by paper trading.
+    """
+    outcome = (outcome or "TARGET").upper().strip()
+    if outcome not in {"TARGET", "STOP", "TIME"}:
+        return {
+            "status": "error",
+            "message": "outcome TARGET, STOP veya TIME olmali",
+        }
+
+    symbol = symbol.upper().strip() or "EREGL"
+
+    # Deterministic synthetic ATR: 2% of price. The live strategy still uses
+    # real ATR; this isolated test is only for validating the lifecycle math.
+    synthetic_atr = entry_price * 0.02
+    raw_entry = float(entry_price)
+    entry = raw_entry * (
+        1 + PAPER_CONFIG["slippage_bps_each_side"] / 10000.0
+    )
+    stop = entry - PAPER_CONFIG["stop_atr"] * synthetic_atr
+    risk = max(entry - stop, entry * 0.001)
+    target = entry + PAPER_CONFIG["reward_risk"] * risk
+
+    now = now_utc_iso()
+    opened = {
+        "symbol": symbol,
+        "timeframe": "1h",
+        "status": "OPEN",
+        "signal_time": now,
+        "entry_time": now,
+        "entry": round(entry, 4),
+        "stop": round(stop, 4),
+        "target": round(target, 4),
+        "last_price": round(entry, 4),
+        "bars_held": 1,
+        "opened_at": now,
+        "test_only": True,
+    }
+
+    if outcome == "TARGET":
+        raw_exit = target
+    elif outcome == "STOP":
+        raw_exit = stop
+    else:
+        # TIME outcome closes flat before costs, making fee/slippage visible.
+        raw_exit = entry
+
+    exit_price = raw_exit * (
+        1 - PAPER_CONFIG["slippage_bps_each_side"] / 10000.0
+    )
+    gross = (exit_price - entry) / entry
+    fees = 2 * PAPER_CONFIG["fee_bps_each_side"] / 10000.0
+    net = gross - fees
+
+    closed = {
+        **opened,
+        "status": "CLOSED",
+        "exit_time": now_utc_iso(),
+        "exit": round(exit_price, 4),
+        "exit_reason": outcome,
+        "net_return_pct": round(net * 100, 3),
+        "result": "WIN" if net > 0 else "LOSS",
+    }
+
+    isolated_state = {"closed_trades": [closed]}
+
+    return {
+        "status": "ok",
+        "mode": "ISOLATED_TEST_ONLY",
+        "real_paper_state_changed": False,
+        "strategy": "V7.2_FROZEN",
+        "config": PAPER_CONFIG,
+        "opened": opened,
+        "closed": closed,
+        "metrics": paper_metrics(isolated_state),
+        "message": "Test tamamlandi; gercek paper verileri degistirilmedi.",
     }
 
 
