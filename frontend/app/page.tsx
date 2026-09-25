@@ -1029,7 +1029,7 @@ export default function Home() {
         </section>
 
         <section className="core-grid">
-          <section className="analysis-card">
+          <section id="analysis-section" className="analysis-card">
             <div className="analysis-header">
               <div>
                 <span className="eyebrow">Seçili Hisse Analizi</span>
@@ -2129,7 +2129,47 @@ export default function Home() {
             <div className="mobile-drawer-nav">
               <button onClick={() => { setMainView("home"); setMobileMenuOpen(false); }}>⌂ Ana Sayfa</button>
               <button onClick={() => { setMainView("scanner"); setMobileMenuOpen(false); }}>⚡ Güçlü Adaylar</button>
-              <button onClick={() => { setMainView("home"); setAnalysisTab("chart"); setMobileMenuOpen(false); }}>▦ Analiz</button>
+              <div className="mobile-drawer-section-label">Analiz</div>
+              <button onClick={() => {
+                setMainView("home");
+                setAnalysisTab("chart");
+                setMobileMenuOpen(false);
+                setTimeout(() => document.getElementById("analysis-section")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+              }}>
+                ▦ Grafikler
+              </button>
+              <button onClick={() => {
+                setMainView("home");
+                setAnalysisTab("support");
+                setMobileMenuOpen(false);
+                setTimeout(() => document.getElementById("analysis-section")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+              }}>
+                ↕ Destek - Direnç
+              </button>
+              <button onClick={() => {
+                setMainView("home");
+                setAnalysisTab("fibonacci");
+                setMobileMenuOpen(false);
+                setTimeout(() => document.getElementById("analysis-section")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+              }}>
+                ◇ Fibonacci
+              </button>
+              <button onClick={() => {
+                setMainView("home");
+                setAnalysisTab("indicators");
+                setMobileMenuOpen(false);
+                setTimeout(() => document.getElementById("analysis-section")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+              }}>
+                ≋ Göstergeler
+              </button>
+              <button onClick={() => {
+                setMainView("home");
+                setAnalysisTab("patterns");
+                setMobileMenuOpen(false);
+                setTimeout(() => document.getElementById("analysis-section")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+              }}>
+                ⌁ Formasyonlar
+              </button>
               <button onClick={() => { setMainView("paper"); setMobileMenuOpen(false); }}>→ Paper Trading</button>
               <button onClick={() => { setMainView("performance"); setMobileMenuOpen(false); }}>▤ Performans</button>
               <button onClick={() => { setMainView("news"); setMobileMenuOpen(false); }}>▣ KAP / Haberler</button>

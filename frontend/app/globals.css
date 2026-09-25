@@ -3795,3 +3795,126 @@ footer{
     text-align: right;
   }
 }
+
+
+/* ===== FRONTEND V26.2 - MOBILE ANALYSIS / CHART FIX ===== */
+@media (max-width: 760px) {
+  /* The main desktop 3-column analysis grid must become one true column. */
+  .core-grid {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 10px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .analysis-card,
+  .levels-card,
+  .right-guide,
+  .guide-card,
+  .bottom-card {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .right-guide {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    grid-template-rows: none !important;
+    gap: 10px !important;
+  }
+
+  .summary-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  #analysis-section {
+    scroll-margin-top: 76px;
+  }
+
+  .analysis-card {
+    padding: 12px !important;
+    overflow: hidden !important;
+  }
+
+  .analysis-header,
+  .price-line,
+  .technical-summary,
+  .support-detail-view,
+  .indicator-view,
+  .pattern-view,
+  .chart-view-wrap,
+  .detail-chart-section {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .technical-summary {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+
+  .chart-view-wrap {
+    display: block !important;
+  }
+
+  .chart-view-wrap.hidden-analysis {
+    display: none !important;
+  }
+
+  .chart-range-bar,
+  .support-range-bar,
+  .detail-chart-head {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    gap: 8px !important;
+  }
+
+  .chart-box,
+  .simple-price-chart,
+  .interactive-chart,
+  .candlestick-box {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .simple-price-chart svg,
+  .interactive-chart svg,
+  .candlestick-box svg {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .support-detail-grid,
+  .indicator-grid,
+  .indicator-lower-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .mobile-drawer-section-label {
+    margin: 12px 4px 7px;
+    color: #e2b85d;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+
+  /* Prevent long analysis cards from appearing as narrow desktop columns. */
+  .levels-card,
+  .guide-card {
+    min-height: 0 !important;
+    height: auto !important;
+  }
+
+  .guide-card {
+    overflow: hidden !important;
+  }
+}
