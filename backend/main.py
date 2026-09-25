@@ -32,8 +32,8 @@ load_dotenv()
 
 app = FastAPI(
     title="BIST Katilim Terminal API",
-    version="20.0.0",
-    description="V7.2 frozen strategy + automatic paper scan + isolated paper test mode"
+    version="21.0.0",
+    description="V7.2 frozen strategy + automatic paper scan + isolated paper test mode + random historical backtest"
 )
 
 FRONTEND_ORIGINS = [
@@ -110,7 +110,7 @@ def now_utc_iso():
 
 def default_state():
     return {
-        "version": "20.0.0",
+        "version": "21.0.0",
         "started_at": now_utc_iso(),
         "strategy": "V7.2_FROZEN",
         "symbols": PAPER_SYMBOLS,
@@ -1571,6 +1571,197 @@ def paper_test_cycle(
         "message": "Test tamamlandi; gercek paper verileri degistirilmedi.",
     }
 
+
+
+def _attach_precomputed_regime(df: pd.DataFrame, regime: pd.DataFrame) -> pd.DataFrame:
+    left = make_index_naive(df).reset_index()
+    right = make_index_naive(regime).reset_index()
+    lt = left.columns[0]
+    rt = right.columns[0]
+    left[lt] = pd.to_datetime(left[lt], errors="coerce").dt.tz_localize(None)
+    right[rt] = pd.to_datetime(right[rt], errors="coerce").dt.tz_localize(None)
+    merged = pd.merge_asof(
+        left.dropna(subset=[lt]).sort_values(lt),
+        right.dropna(subset=[rt]).sort_values(rt),
+        left_on=lt,
+        right_on=rt,
+        direction="backward",
+    ).set_index(lt)
+    if rt != lt and rt in merged.columns:
+        merged = merged.drop(columns=[rt])
+    merged["REGIME_SCORE"] = merged["REGIME_SCORE"].fillna(0).astype(int)
+    return merged
+
+
+def _simulate_historical_trade(df: pd.DataFrame, signal_i: int, symbol: str):
+    entry_i = signal_i + 1
+    if entry_i >= len(df):
+        return None
+
+    signal_row = df.iloc[signal_i]
+    raw_entry = float(df.iloc[entry_i]["Open"])
+    entry = raw_entry * (1 + PAPER_CONFIG["slippage_bps_each_side"] / 10000.0)
+    atr_v = float(signal_row["ATR"])
+    stop = entry - PAPER_CONFIG["stop_atr"] * atr_v
+    risk = max(entry - stop, entry * 0.001)
+    target = entry + PAPER_CONFIG["reward_risk"] * risk
+
+    max_exit_i = min(len(df) - 1, entry_i + PAPER_CONFIG["max_hold_bars"] - 1)
+    exit_i = None
+    raw_exit = None
+    reason = None
+
+    for i in range(entry_i, max_exit_i + 1):
+        bar = df.iloc[i]
+        # Conservative same-bar rule: if both are touched, STOP wins,
+        # matching the live paper engine's check order.
+        if float(bar["Low"]) <= stop:
+            exit_i, raw_exit, reason = i, stop, "STOP"
+            break
+        if float(bar["High"]) >= target:
+            exit_i, raw_exit, reason = i, target, "TARGET"
+            break
+
+    if exit_i is None:
+        exit_i = max_exit_i
+        raw_exit = float(df.iloc[exit_i]["Close"])
+        reason = "TIME"
+
+    exit_price = raw_exit * (1 - PAPER_CONFIG["slippage_bps_each_side"] / 10000.0)
+    gross = (exit_price - entry) / entry
+    fees = 2 * PAPER_CONFIG["fee_bps_each_side"] / 10000.0
+    net = gross - fees
+
+    return {
+        "symbol": symbol,
+        "signal_time": str(df.index[signal_i]),
+        "entry_time": str(df.index[entry_i]),
+        "exit_time": str(df.index[exit_i]),
+        "entry": round(entry, 4),
+        "stop": round(stop, 4),
+        "target": round(target, 4),
+        "exit": round(exit_price, 4),
+        "exit_reason": reason,
+        "bars_held": int(exit_i - entry_i + 1),
+        "net_return_pct": round(net * 100, 3),
+        "result": "WIN" if net > 0 else "LOSS",
+    }
+
+
+@app.post("/backtest/random-history")
+def random_history_backtest(
+    tests: int = Query(20, ge=5, le=100),
+    symbol_count: int = Query(12, ge=3, le=50),
+    seed: int = Query(72, ge=0, le=999999),
+):
+    """
+    Reproducible historical random-signal test for V7.2_FROZEN.
+
+    It scans a deterministic random subset of the current paper universe,
+    finds historical bars where the exact frozen signal was true, then
+    randomly samples up to `tests` completed historical trades. Entry uses
+    the NEXT bar open, so the signal never sees its own future entry/exit bar.
+    Real paper state is never changed.
+    """
+    rng = np.random.default_rng(seed)
+    symbols = list(PAPER_SYMBOLS)
+    if symbol_count < len(symbols):
+        selected = sorted(rng.choice(symbols, size=symbol_count, replace=False).tolist())
+    else:
+        selected = symbols
+
+    benchmark, regime = fetch_benchmark_daily()
+    candidates = []
+    errors = []
+
+    for symbol in selected:
+        try:
+            raw = fetch_data(symbol, "1h")
+            enriched = enrich(raw)
+            df = _attach_precomputed_regime(enriched, regime)
+            if len(df) < 5:
+                continue
+            # Need previous bar for MACD-hist improvement and a next bar for entry.
+            for i in range(1, len(df) - 1):
+                if pullback_signal(df.iloc[i], df.iloc[i - 1]):
+                    trade = _simulate_historical_trade(df, i, symbol)
+                    if trade is not None:
+                        candidates.append(trade)
+        except Exception as e:
+            errors.append({"symbol": symbol, "message": str(e)})
+
+    if not candidates:
+        return {
+            "status": "ok",
+            "strategy": "V7.2_FROZEN",
+            "mode": "RANDOM_HISTORICAL_ISOLATED",
+            "real_paper_state_changed": False,
+            "seed": seed,
+            "benchmark": benchmark,
+            "selected_symbols": selected,
+            "candidate_signal_count": 0,
+            "sampled_trade_count": 0,
+            "trades": [],
+            "metrics": {},
+            "errors": errors,
+            "message": "Secilen sembollerde tamamlanmis tarihsel V7.2 sinyali bulunamadi.",
+        }
+
+    take = min(tests, len(candidates))
+    idxs = rng.choice(len(candidates), size=take, replace=False)
+    trades = [candidates[int(i)] for i in idxs]
+    trades.sort(key=lambda x: x["signal_time"])
+
+    returns = np.array([t["net_return_pct"] / 100.0 for t in trades], dtype=float)
+    wins = returns[returns > 0]
+    losses = returns[returns <= 0]
+    gp = float(wins.sum()) if len(wins) else 0.0
+    gl = abs(float(losses.sum())) if len(losses) else 0.0
+    pf = gp / gl if gl > 0 else None
+
+    equity = 1.0
+    peak = 1.0
+    max_dd = 0.0
+    for r in returns:
+        equity *= 1 + r
+        peak = max(peak, equity)
+        dd = equity / peak - 1.0
+        max_dd = min(max_dd, dd)
+
+    metrics = {
+        "closed_trades": int(len(trades)),
+        "wins": int((returns > 0).sum()),
+        "losses": int((returns <= 0).sum()),
+        "win_rate_pct": round(float((returns > 0).mean() * 100), 2),
+        "expectancy_pct_per_trade": round(float(returns.mean() * 100), 3),
+        "profit_factor": round(pf, 3) if pf is not None else None,
+        "total_compounded_return_pct": round((equity - 1) * 100, 2),
+        "max_drawdown_pct": round(max_dd * 100, 2),
+    }
+
+    return {
+        "status": "ok",
+        "strategy": "V7.2_FROZEN",
+        "mode": "RANDOM_HISTORICAL_ISOLATED",
+        "real_paper_state_changed": False,
+        "seed": seed,
+        "benchmark": benchmark,
+        "timeframe": "1h",
+        "requested_tests": tests,
+        "selected_symbols": selected,
+        "candidate_signal_count": len(candidates),
+        "sampled_trade_count": len(trades),
+        "config": PAPER_CONFIG,
+        "metrics": metrics,
+        "trades": trades,
+        "errors": errors,
+        "notes": [
+            "Sinyal kapanmis 1 saatlik mumda hesaplanir; giris bir sonraki mumun acilisidir.",
+            "Stop/hedef ayni mumda birlikte gorulurse konservatif olarak STOP once kabul edilir.",
+            "Komisyon ve slippage paper trading ile aynidir.",
+            "Bu endpoint gercek paper_state.json dosyasini degistirmez.",
+        ],
+    }
 
 @app.get("/paper/status")
 def paper_status():
