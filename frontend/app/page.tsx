@@ -139,12 +139,18 @@ type NewsItem = {
   url: string | null;
   impact: "pozitif_aday" | "negatif_aday" | "notr";
   impact_method: string;
+  source?: "Google News" | "Yahoo Finance" | string;
 };
 
 type NewsData = {
   status: string;
   symbol: string;
   source: string;
+  sources?: string[];
+  source_counts?: {
+    google_news: number;
+    yahoo_finance: number;
+  };
   realtime_guaranteed: boolean;
   results: NewsItem[];
   errors: string[];
@@ -2506,7 +2512,7 @@ function NewsView({
         </button>
       </div>
 
-      <div className="news-summary">
+      <div className="news-summary news-summary-v25">
         <div className="news-kap-card">
           <span>Resmi Kaynak</span>
           <strong>KAP</strong>
@@ -2527,9 +2533,11 @@ function NewsView({
           </a>
         </div>
         <div><span>KAP Bildirimi</span><strong>{kapData?.count ?? 0}</strong></div>
-        <div><span>Haber</span><strong>{data?.results.length ?? 0}</strong></div>
-        <div className="news-pos"><span>Pozitif Haber Adayı</span><strong>{positive}</strong></div>
-        <div className="news-neg"><span>Negatif Haber Adayı</span><strong>{negative}</strong></div>
+        <div><span>Toplam Haber</span><strong>{data?.results.length ?? 0}</strong></div>
+        <div className="source-google"><span>Google News</span><strong>{data?.source_counts?.google_news ?? 0}</strong></div>
+        <div className="source-yahoo"><span>Yahoo Finance</span><strong>{data?.source_counts?.yahoo_finance ?? 0}</strong></div>
+        <div className="news-pos"><span>Pozitif Aday</span><strong>{positive}</strong></div>
+        <div className="news-neg"><span>Negatif Aday</span><strong>{negative}</strong></div>
       </div>
 
       <div className="kap-news-grid">
@@ -2603,7 +2611,7 @@ function NewsView({
           <div className="paper-panel-head">
             <div>
               <b>Son Haberler</b>
-              <span>{data?.source || "Yahoo Finance"} · resmi gerçek zaman garantisi yok</span>
+              <span>{data?.source || "Google News + Yahoo Finance"} · resmi gerçek zaman garantisi yok</span>
             </div>
           </div>
 
@@ -2618,7 +2626,12 @@ function NewsView({
                 <article className="news-item" key={`${item.title}-${idx}`}>
                   <div className="news-item-main">
                     <div className="news-item-meta">
-                      <span>{item.publisher || "Kaynak"}</span>
+                      <div className="news-source-meta">
+                        <em className={`news-source-badge ${item.source === "Google News" ? "google" : "yahoo"}`}>
+                          {item.source || "Haber"}
+                        </em>
+                        <span>{item.publisher || "Kaynak"}</span>
+                      </div>
                       <time>{item.published_at ? fmtDateTime(item.published_at) : "Zaman yok"}</time>
                     </div>
                     <b>{item.title}</b>
@@ -2639,7 +2652,7 @@ function NewsView({
               <div className="paper-empty">
                 <span>◇</span>
                 <b>Haber bulunamadı</b>
-                <small>Kaynak bu hisse için sonuç döndürmemiş olabilir.</small>
+                <small>Google News ve Yahoo Finance bu hisse için güncel sonuç döndürmemiş olabilir.</small>
               </div>
             )}
           </div>

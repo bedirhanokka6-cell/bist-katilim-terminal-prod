@@ -8,10 +8,14 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone, timedelta
+from urllib.parse import quote_plus
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 import json
 import os
 import requests
+import xml.etree.ElementTree as ET
+import html
 import threading
 
 
@@ -27,7 +31,7 @@ load_dotenv()
 
 app = FastAPI(
     title="BIST Katilim Terminal API",
-    version="18.2.0",
+    version="19.0.0",
     description="V7.2 frozen strategy + automatic paper scan + notification queue"
 )
 
@@ -105,7 +109,7 @@ def now_utc_iso():
 
 def default_state():
     return {
-        "version": "18.2.0",
+        "version": "19.0.0",
         "started_at": now_utc_iso(),
         "strategy": "V7.2_FROZEN",
         "symbols": PAPER_SYMBOLS,
@@ -165,7 +169,7 @@ def load_state():
     state["symbols"] = PAPER_SYMBOLS
     state["total_universe"] = len(PAPER_SYMBOLS)
     state.setdefault("strategy", "V7.2_FROZEN")
-    state["version"] = "18.0.0"
+    state["version"] = "19.0.0"
     save_state(state)
     return state
 
@@ -1038,20 +1042,101 @@ def kap_disclosures(
         }
 
 
-@app.get("/news/{symbol}")
-def symbol_news(
-    symbol: str,
-    limit: int = Query(12, ge=1, le=30),
-):
-    base_symbol = symbol.upper().replace(".IS", "").strip()
+
+def _normalize_news_title(title: str):
+    text = html.unescape(title or "").strip()
+    # Google News RSS basliklarinda kaynak bazen " - Kaynak" olarak sona eklenir.
+    return re.sub(r"\s+", " ", text)
+
+
+def _google_news_query_terms(base_symbol: str):
+    terms = [f'"{base_symbol}" Borsa']
+    try:
+        company = fetch_kap_company(base_symbol)
+        title = str(company.get("title") or "").strip()
+        if title:
+            # Sirket unvaninin cok uzun hukuki eklerini aramaya tasimamak icin ilk 7 kelime.
+            short_title = " ".join(title.split()[:7])
+            terms.append(f'"{short_title}"')
+    except Exception:
+        pass
+    return terms
+
+
+def fetch_google_news(base_symbol: str, limit: int = 12):
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/124 Safari/537.36"
+        ),
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    })
+
+    results = []
+    errors = []
+    seen_titles = set()
+
+    for query in _google_news_query_terms(base_symbol):
+        try:
+            url = (
+                "https://news.google.com/rss/search?q="
+                + quote_plus(query)
+                + "&hl=tr&gl=TR&ceid=TR:tr"
+            )
+            r = session.get(url, timeout=10)
+            r.raise_for_status()
+
+            root = ET.fromstring(r.content)
+            for item in root.findall("./channel/item"):
+                title = _normalize_news_title(item.findtext("title") or "")
+                link = (item.findtext("link") or "").strip() or None
+                pub_date = (item.findtext("pubDate") or "").strip()
+                source_el = item.find("source")
+                publisher = (
+                    (source_el.text or "").strip()
+                    if source_el is not None and source_el.text
+                    else "Google News"
+                )
+
+                if not title:
+                    continue
+
+                norm = re.sub(r"[^a-z0-9çğıöşü]+", "", title.lower())
+                if not norm or norm in seen_titles:
+                    continue
+                seen_titles.add(norm)
+
+                published_at = None
+                if pub_date:
+                    try:
+                        dt = parsedate_to_datetime(pub_date)
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        published_at = dt.astimezone(timezone.utc).isoformat()
+                    except Exception:
+                        published_at = pub_date
+
+                results.append({
+                    "title": title,
+                    "publisher": publisher,
+                    "published_at": published_at,
+                    "url": link,
+                    "impact": classify_news_impact(title),
+                    "impact_method": "headline_keyword_heuristic",
+                    "source": "Google News",
+                })
+
+                if len(results) >= limit:
+                    return results, errors
+        except Exception as e:
+            errors.append(f"Google News: {e}")
+
+    return results[:limit], errors
+
+
+def fetch_yahoo_news(base_symbol: str, limit: int = 12):
     ticker_symbol = normalize_symbol(base_symbol)
-
-    now_ts = datetime.now(timezone.utc).timestamp()
-    cache_key = f"{ticker_symbol}:{limit}"
-    cached = NEWS_CACHE.get(cache_key)
-    if cached and now_ts - cached["ts"] < NEWS_CACHE_TTL_SECONDS:
-        return cached["data"]
-
     raw_news = []
     errors = []
 
@@ -1059,53 +1144,109 @@ def symbol_news(
         ticker = yf.Ticker(ticker_symbol)
         raw_news = ticker.news or []
     except Exception as e:
-        errors.append(str(e))
+        errors.append(f"Yahoo ticker: {e}")
 
     if not raw_news:
         try:
             search = yf.Search(ticker_symbol, news_count=limit)
             raw_news = getattr(search, "news", None) or []
         except Exception as e:
-            errors.append(str(e))
+            errors.append(f"Yahoo search: {e}")
 
     results = []
     seen = set()
-
     for item in raw_news:
-        title = _news_item_title(item).strip()
+        title = _normalize_news_title(_news_item_title(item))
         if not title:
             continue
 
-        url = _news_item_url(item)
-        dedupe = (title, url)
-        if dedupe in seen:
+        norm = re.sub(r"[^a-z0-9çğıöşü]+", "", title.lower())
+        if not norm or norm in seen:
             continue
-        seen.add(dedupe)
+        seen.add(norm)
 
         results.append({
             "title": title,
             "publisher": _news_item_publisher(item),
             "published_at": _news_item_time(item),
-            "url": url,
+            "url": _news_item_url(item),
             "impact": classify_news_impact(title),
             "impact_method": "headline_keyword_heuristic",
+            "source": "Yahoo Finance",
         })
-
         if len(results) >= limit:
             break
+
+    return results, errors
+
+
+@app.get("/news/{symbol}")
+def symbol_news(
+    symbol: str,
+    limit: int = Query(16, ge=1, le=30),
+):
+    base_symbol = symbol.upper().replace(".IS", "").strip()
+
+    now_ts = datetime.now(timezone.utc).timestamp()
+    cache_key = f"multi:{base_symbol}:{limit}"
+    cached = NEWS_CACHE.get(cache_key)
+    if cached and now_ts - cached["ts"] < NEWS_CACHE_TTL_SECONDS:
+        return cached["data"]
+
+    # Turk hisselerinde Yahoo tek basina cok sik 0 sonuc dondugundan
+    # Google News RSS ana kaynak, Yahoo ek/fallback kaynak olarak kullanilir.
+    google_results, google_errors = fetch_google_news(base_symbol, limit=limit)
+    yahoo_results, yahoo_errors = fetch_yahoo_news(base_symbol, limit=limit)
+
+    merged = []
+    seen_titles = set()
+
+    def add_rows(rows):
+        for item in rows:
+            title = item.get("title") or ""
+            norm = re.sub(r"[^a-z0-9çğıöşü]+", "", title.lower())
+            if not norm or norm in seen_titles:
+                continue
+            seen_titles.add(norm)
+            merged.append(item)
+
+    add_rows(google_results)
+    add_rows(yahoo_results)
+
+    def sort_key(item):
+        value = item.get("published_at")
+        if not value:
+            return datetime(1970, 1, 1, tzinfo=timezone.utc)
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            return datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+    merged.sort(key=sort_key, reverse=True)
+    merged = merged[:limit]
+
+    source_counts = {
+        "google_news": sum(1 for x in merged if x.get("source") == "Google News"),
+        "yahoo_finance": sum(1 for x in merged if x.get("source") == "Yahoo Finance"),
+    }
 
     data = {
         "status": "ok",
         "symbol": base_symbol,
-        "source": "Yahoo Finance",
+        "source": "Google News + Yahoo Finance",
+        "sources": ["Google News", "Yahoo Finance"],
+        "source_counts": source_counts,
         "realtime_guaranteed": False,
-        "results": results,
-        "errors": errors,
+        "results": merged,
+        "errors": google_errors + yahoo_errors,
         "kap": {
             "source": "KAP",
             "official": True,
             "search_url": f"https://www.kap.org.tr/tr/bildirim-sorgu?q={base_symbol}",
-            "note": "KAP bildirimleri resmi KAP sayfasinda acilir; terminal bu surumde KAP icerigini kopyalamaz.",
+            "note": "KAP resmi kaynak olarak ayri listelenir.",
         },
         "classification_note": (
             "Pozitif/negatif/notr etiketi yalnizca basliktaki anahtar kelimelerden uretilen "
@@ -1300,7 +1441,7 @@ def root():
     return {
         "status": "ok",
         "name": "BIST Katilim Terminal",
-        "version": "18.2.0",
+        "version": "19.0.0",
         "strategy": "V7.2_FROZEN",
         "paper_symbols": PAPER_SYMBOLS,
         "paper_universe_count": len(PAPER_SYMBOLS),
@@ -1321,7 +1462,7 @@ def root():
 def health():
     return {
         "status": "healthy",
-        "version": "18.2.0",
+        "version": "19.0.0",
         "scheduler_running": scheduler.running,
     }
 

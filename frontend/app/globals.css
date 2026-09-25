@@ -3497,3 +3497,44 @@ footer{
     justify-content:flex-start;
   }
 }
+
+
+/* ===== FRONTEND V25 - COKLU HABER KAYNAGI ===== */
+.news-summary-v25{
+  grid-template-columns:1.7fr repeat(6,.62fr);
+}
+.source-google strong{color:#66c8ff!important}
+.source-yahoo strong{color:#bd9cff!important}
+.news-source-meta{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  min-width:0;
+}
+.news-source-badge{
+  flex:0 0 auto;
+  padding:2px 5px;
+  border-radius:99px;
+  font-size:6.5px;
+  font-style:normal;
+  border:1px solid #2b5067;
+  background:#0b2435;
+}
+.news-source-badge.google{
+  color:#70ceff;
+  border-color:rgba(83,185,242,.32);
+  background:rgba(83,185,242,.07);
+}
+.news-source-badge.yahoo{
+  color:#c4a7ff;
+  border-color:rgba(171,126,255,.30);
+  background:rgba(171,126,255,.07);
+}
+@media(max-width:1200px){
+  .news-summary-v25{grid-template-columns:repeat(4,1fr)}
+  .news-summary-v25 .news-kap-card{grid-column:span 2}
+}
+@media(max-width:800px){
+  .news-summary-v25{grid-template-columns:1fr 1fr}
+  .news-summary-v25 .news-kap-card{grid-column:1/-1}
+}
