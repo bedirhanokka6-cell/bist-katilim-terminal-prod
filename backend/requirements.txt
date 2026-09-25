@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pandas
+numpy
+yfinance
+apscheduler
+
+firebase-admin>=6.5.0
+
+python-dotenv>=1.0.1
+
+requests>=2.32.0
