@@ -33,7 +33,7 @@ load_dotenv()
 
 app = FastAPI(
     title="BIST Katilim Terminal API",
-    version="20.1.3",
+    version="20.2.0",
     description="V7.2 frozen strategy + automatic paper scan + isolated paper test mode + Istanbul time + XK050 fallback"
 )
 
@@ -125,7 +125,7 @@ def _to_istanbul_iso(value):
 
 def default_state():
     return {
-        "version": "20.1.3",
+        "version": "20.2.0",
         "started_at": now_utc_iso(),
         "strategy": "V7.2_FROZEN",
         "symbols": PAPER_SYMBOLS,
@@ -1478,7 +1478,7 @@ def root():
 def health():
     return {
         "status": "healthy",
-        "version": "20.1.3",
+        "version": "20.2.0",
         "scheduler_running": scheduler.running,
     }
 
@@ -2309,16 +2309,16 @@ def _parse_tr_number(value: str):
 def _download_xk050_borsa_istanbul():
     """
     Yahoo Finance XK050 verisini vermediginde resmi Borsa Istanbul
-    Katilim Esasli Paylar ve Pay Endeksleri sayfasindaki ozet tablodan
-    BIST KATILIM 50 satirini okur.
+    /endeksler sayfasindaki statik tablo satirindan BIST KATILIM 50 verisini okur.
+    Bu sayfa server-side HTML icinde endeks satirlarini gercekten tasir.
     """
-    url = "https://www.borsaistanbul.com/katilim-esasli-paylar-ve-pay-endeksleri"
+    url = "https://www.borsaistanbul.com/endeksler"
 
     r = requests.get(
         url,
         timeout=15,
         headers={
-            "User-Agent": "Mozilla/5.0 (compatible; BIST-Katilim-Terminal/20.1.3)",
+            "User-Agent": "Mozilla/5.0 (compatible; BIST-Katilim-Terminal/20.1.4)",
             "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.6",
         },
     )
@@ -2326,44 +2326,94 @@ def _download_xk050_borsa_istanbul():
 
     raw = html.unescape(r.text)
 
-    # Resmi sayfanin gorunur ozet tablosu su siradadir:
-    # Endeks | Son Deger | Islem Hacmi (TL) | Bugun (%) | ...
-    # HTML yapisi degisebildigi icin once duz metne cevirip bu tablo satirini yakalariz.
+    # Once tablo satirlarini ayri ayri tara.
+    rows = re.findall(r"<tr\b[^>]*>(.*?)</tr>", raw, flags=re.I | re.S)
+
+    for row in rows:
+        cells = re.findall(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", row, flags=re.I | re.S)
+        clean = []
+        for cell in cells:
+            s = re.sub(r"<[^>]+>", " ", cell)
+            s = re.sub(r"\s+", " ", html.unescape(s)).strip()
+            clean.append(s)
+
+        joined = " | ".join(clean).upper()
+        if "BIST KATILIM 50" not in joined or "XK050" not in joined:
+            continue
+
+        # Beklenen kolonlar:
+        # Ad | Kod | Tarih | Guncel Deger | Degisim % | En Yuksek | En Dusuk | Kur | ...
+        try:
+            code_idx = next(i for i, v in enumerate(clean) if v.upper() == "XK050")
+        except StopIteration:
+            continue
+
+        if len(clean) <= code_idx + 3:
+            continue
+
+        date_raw = clean[code_idx + 1]
+        value_raw = clean[code_idx + 2]
+        change_raw = clean[code_idx + 3]
+
+        if not re.search(r"\d{2}\.\d{2}\.\d{4}", date_raw):
+            continue
+
+        value = _parse_tr_number(value_raw)
+        change = _parse_tr_number(change_raw)
+
+        dt = None
+        for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
+            try:
+                dt = datetime.strptime(date_raw, fmt)
+                break
+            except ValueError:
+                pass
+
+        asof = dt.replace(tzinfo=ISTANBUL_TZ).isoformat() if dt else date_raw
+
+        return {
+            "ticker": "XK050",
+            "value": round(value, 4),
+            "daily_change_pct": round(change, 3),
+            "asof": asof,
+            "proxy": False,
+            "source": "Borsa Istanbul",
+            "delayed": True,
+            "delay_note": "Borsa Istanbul endeks verileri gecikmeli olabilir.",
+        }
+
+    # Tablo yapisi degisirse duz metin fallback.
     plain = re.sub(r"<script\b[^>]*>.*?</script>", " ", raw, flags=re.I | re.S)
     plain = re.sub(r"<style\b[^>]*>.*?</style>", " ", plain, flags=re.I | re.S)
     plain = re.sub(r"<[^>]+>", " ", plain)
     plain = re.sub(r"\s+", " ", html.unescape(plain)).strip()
 
-    # Ornek gorunur yapi:
-    # BIST KATILIM 50 18.674,85 90.002.524.720 -3,01 -0,16 ...
     m = re.search(
-        r"BIST\s+KATILIM\s+50\s+"
-        r"([0-9.]+,[0-9]+)\s+"          # Son Deger
-        r"([0-9.]+)\s+"                  # Islem Hacmi
-        r"([+\-]?[0-9]+,[0-9]+)",        # Bugun %
+        r"BIST\s+KATILIM\s+50\s+XK050\s+"
+        r"(\d{2}\.\d{2}\.\d{4})\s+"
+        r"([0-9.]+,[0-9]+)\s+"
+        r"([+\-]?[0-9]+,[0-9]+)",
         plain,
         flags=re.I,
     )
     if not m:
-        raise ValueError("Borsa Istanbul XK050 ozet tablo satiri ayrıştırılamadi")
+        raise ValueError("Borsa Istanbul /endeksler XK050 satiri ayrıştırılamadi")
 
-    value_raw, volume_raw, change_raw = m.groups()
+    date_raw, value_raw, change_raw = m.groups()
     value = _parse_tr_number(value_raw)
     change = _parse_tr_number(change_raw)
 
-    # Sayfa bu ozet tabloda saat damgasi vermiyor; endpointin cekildigi Istanbul
-    # zamani "asof" olarak kullanilir ve delayed=true ile acikca isaretlenir.
-    asof = datetime.now(ISTANBUL_TZ).isoformat()
+    dt = datetime.strptime(date_raw, "%d.%m.%Y").replace(tzinfo=ISTANBUL_TZ)
 
     return {
         "ticker": "XK050",
         "value": round(value, 4),
         "daily_change_pct": round(change, 3),
-        "asof": asof,
+        "asof": dt.isoformat(),
         "proxy": False,
         "source": "Borsa Istanbul",
         "delayed": True,
-        "delay_note": "Borsa Istanbul endeks degerleri en az 15 dakika gecikmeli olabilir.",
+        "delay_note": "Borsa Istanbul endeks verileri gecikmeli olabilir.",
     }
 
 
@@ -2436,6 +2486,262 @@ def market_indexes():
 
     _cache_set(cache_key, payload)
     return payload
+
+
+def _detect_engulfing_rows(df: pd.DataFrame):
+    """
+    Returns candle-pattern events using only CLOSED candles.
+
+    Bullish Engulfing:
+      previous candle bearish, current candle bullish,
+      current real body fully engulfs previous real body.
+
+    Bearish Engulfing:
+      previous candle bullish, current candle bearish,
+      current real body fully engulfs previous real body.
+    """
+    events = []
+    if df is None or len(df) < 3:
+        return events
+
+    d = df.copy()
+    cols = {str(c).lower(): c for c in d.columns}
+    need = ["open", "high", "low", "close"]
+    if not all(k in cols for k in need):
+        return events
+
+    ocol, hcol, lcol, ccol = [cols[k] for k in need]
+
+    for i in range(1, len(d) - 1):
+        prev = d.iloc[i - 1]
+        cur = d.iloc[i]
+
+        po, pc = float(prev[ocol]), float(prev[ccol])
+        co, cc = float(cur[ocol]), float(cur[ccol])
+
+        prev_bear = pc < po
+        prev_bull = pc > po
+        cur_bull = cc > co
+        cur_bear = cc < co
+
+        bullish = prev_bear and cur_bull and co <= pc and cc >= po
+        bearish = prev_bull and cur_bear and co >= pc and cc <= po
+
+        if bullish or bearish:
+            events.append({
+                "row_index": i,
+                "pattern": "BULLISH_ENGULFING" if bullish else "BEARISH_ENGULFING",
+                "signal_time": d.index[i],
+                "next_row_index": i + 1,
+            })
+
+    return events
+
+
+def _simulate_engulfing_trade(df: pd.DataFrame, event: dict, rr: float = 2.0, max_hold_bars: int = 14):
+    """
+    Conservative candle-pattern backtest:
+    - signal is confirmed on candle close
+    - entry is NEXT candle open
+    - long for bullish engulfing, short for bearish engulfing
+    - stop beyond signal candle extreme
+    - target = rr * initial risk
+    - if stop and target touch in same bar, STOP wins
+    """
+    d = df
+    i = int(event["row_index"])
+    j = int(event["next_row_index"])
+
+    cols = {str(c).lower(): c for c in d.columns}
+    ocol, hcol, lcol, ccol = [cols[k] for k in ["open", "high", "low", "close"]]
+
+    signal = d.iloc[i]
+    entry_bar = d.iloc[j]
+    entry = float(entry_bar[ocol])
+
+    long_side = event["pattern"] == "BULLISH_ENGULFING"
+
+    if long_side:
+        stop = float(signal[lcol])
+        risk = entry - stop
+        if risk <= 0:
+            return None
+        target = entry + rr * risk
+    else:
+        stop = float(signal[hcol])
+        risk = stop - entry
+        if risk <= 0:
+            return None
+        target = entry - rr * risk
+
+    exit_price = None
+    exit_reason = None
+    exit_i = None
+
+    end_i = min(len(d) - 1, j + max_hold_bars - 1)
+    for k in range(j, end_i + 1):
+        row = d.iloc[k]
+        hi = float(row[hcol])
+        lo = float(row[lcol])
+
+        if long_side:
+            stop_hit = lo <= stop
+            target_hit = hi >= target
+        else:
+            stop_hit = hi >= stop
+            target_hit = lo <= target
+
+        # Conservative tie-break.
+        if stop_hit:
+            exit_price = stop
+            exit_reason = "STOP"
+            exit_i = k
+            break
+        if target_hit:
+            exit_price = target
+            exit_reason = "TARGET"
+            exit_i = k
+            break
+
+    if exit_price is None:
+        exit_i = end_i
+        exit_price = float(d.iloc[exit_i][ccol])
+        exit_reason = "TIME"
+
+    # Same round-trip friction as paper defaults: 10 bps fee + 5 bps slippage each side.
+    friction_pct = 2 * (0.10 + 0.05)
+
+    if long_side:
+        gross_pct = (exit_price / entry - 1.0) * 100.0
+    else:
+        gross_pct = (entry / exit_price - 1.0) * 100.0
+
+    net_pct = gross_pct - friction_pct
+
+    return {
+        "pattern": event["pattern"],
+        "signal_time": str(d.index[i]),
+        "entry_time": str(d.index[j]),
+        "exit_time": str(d.index[exit_i]),
+        "entry": round(entry, 4),
+        "stop": round(stop, 4),
+        "target": round(target, 4),
+        "exit": round(exit_price, 4),
+        "exit_reason": exit_reason,
+        "bars_held": int(exit_i - j + 1),
+        "net_return_pct": round(net_pct, 3),
+        "result": "WIN" if net_pct > 0 else "LOSS",
+    }
+
+
+@app.post("/candles/backtest-engulfing")
+def candles_backtest_engulfing(
+    symbol: str = "EREGL",
+    period: str = "2y",
+    interval: str = "1h",
+    rr: float = 2.0,
+    max_hold_bars: int = 14,
+    limit: int = 200,
+):
+    """
+    Engulfing historical test. Analysis only; does not change paper_state.
+    """
+    symbol = str(symbol).upper().strip()
+    yf_symbol = symbol if symbol.endswith(".IS") else f"{symbol}.IS"
+
+    if interval not in {"1h", "60m"}:
+        raise HTTPException(status_code=400, detail="Bu test su an sadece 1h icin hazirlandi.")
+
+    if rr <= 0 or rr > 5:
+        raise HTTPException(status_code=400, detail="rr 0-5 araliginda olmali.")
+
+    if max_hold_bars < 1 or max_hold_bars > 100:
+        raise HTTPException(status_code=400, detail="max_hold_bars 1-100 araliginda olmali.")
+
+    try:
+        df = yf.download(
+            yf_symbol,
+            period=period,
+            interval="1h",
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Veri cekme hatasi: {e}")
+
+    if df is None or len(df) < 20:
+        raise HTTPException(status_code=404, detail=f"Yeterli veri bulunamadi: {symbol}")
+
+    # yfinance can return MultiIndex.
+    if isinstance(df.columns, pd.MultiIndex):
+        try:
+            df.columns = df.columns.get_level_values(0)
+        except Exception:
+            pass
+
+    df = df.dropna(subset=["Open", "High", "Low", "Close"]).copy()
+    events = _detect_engulfing_rows(df)
+
+    trades = []
+    for ev in events:
+        t = _simulate_engulfing_trade(df, ev, rr=rr, max_hold_bars=max_hold_bars)
+        if t:
+            t["symbol"] = symbol
+            trades.append(t)
+        if len(trades) >= limit:
+            break
+
+    wins = sum(1 for t in trades if t["result"] == "WIN")
+    losses = len(trades) - wins
+    returns = [float(t["net_return_pct"]) for t in trades]
+
+    gross_win = sum(x for x in returns if x > 0)
+    gross_loss = abs(sum(x for x in returns if x < 0))
+    profit_factor = round(gross_win / gross_loss, 3) if gross_loss > 0 else None
+    expectancy = round(sum(returns) / len(returns), 3) if returns else 0.0
+
+    bull = [t for t in trades if t["pattern"] == "BULLISH_ENGULFING"]
+    bear = [t for t in trades if t["pattern"] == "BEARISH_ENGULFING"]
+
+    def _mini_metrics(items):
+        if not items:
+            return {"trades": 0, "win_rate_pct": 0.0, "expectancy_pct": 0.0}
+        w = sum(1 for x in items if x["result"] == "WIN")
+        r = [float(x["net_return_pct"]) for x in items]
+        return {
+            "trades": len(items),
+            "win_rate_pct": round(w / len(items) * 100, 2),
+            "expectancy_pct": round(sum(r) / len(r), 3),
+        }
+
+    return {
+        "status": "ok",
+        "mode": "HISTORICAL_ENGULFING_ANALYSIS_ONLY",
+        "real_paper_state_changed": False,
+        "symbol": symbol,
+        "timeframe": "1h",
+        "period": period,
+        "rules": {
+            "entry": "next candle open",
+            "stop": "signal candle extreme",
+            "reward_risk": rr,
+            "max_hold_bars": max_hold_bars,
+            "same_bar_stop_and_target": "STOP first (conservative)",
+            "round_trip_friction_pct": 0.30,
+        },
+        "summary": {
+            "trades": len(trades),
+            "wins": wins,
+            "losses": losses,
+            "win_rate_pct": round(wins / len(trades) * 100, 2) if trades else 0.0,
+            "expectancy_pct_per_trade": expectancy,
+            "profit_factor": profit_factor,
+            "bullish": _mini_metrics(bull),
+            "bearish": _mini_metrics(bear),
+        },
+        "trades_detail": trades,
+    }
 
 
 class AlertSettingsRequest(BaseModel):
