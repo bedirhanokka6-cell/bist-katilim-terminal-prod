@@ -33,8 +33,8 @@ load_dotenv()
 
 app = FastAPI(
     title="BIST Katilim Terminal API",
-    version="20.1.0",
-    description="V7.2 frozen strategy + automatic paper scan + isolated paper test mode + Istanbul time + XK050 official fallback"
+    version="20.1.1",
+    description="V7.2 frozen strategy + automatic paper scan + isolated paper test mode + Istanbul time + XK050 fallback"
 )
 
 FRONTEND_ORIGINS = [
@@ -107,16 +107,14 @@ KAP_CACHE_TTL_SECONDS = 180
 
 
 def now_utc_iso():
-    # Geriye uyumluluk icin fonksiyon adi korunuyor; tum uygulama zamanlari Istanbul saatidir.
+    # Fonksiyon adi geriye uyumluluk icin korunur; uygulama zamani Istanbul'dur.
     return datetime.now(ISTANBUL_TZ).isoformat()
 
 
 def _to_istanbul_iso(value):
-    """Pandas/datetime zamanini Europe/Istanbul saatine cevirir."""
     try:
         ts = pd.Timestamp(value)
         if ts.tzinfo is None:
-            # BIST/Yahoo TR verisinde naive zamanlar borsa yerel saati kabul edilir.
             ts = ts.tz_localize(ISTANBUL_TZ)
         else:
             ts = ts.tz_convert(ISTANBUL_TZ)
@@ -127,7 +125,7 @@ def _to_istanbul_iso(value):
 
 def default_state():
     return {
-        "version": "20.1.0",
+        "version": "20.1.1",
         "started_at": now_utc_iso(),
         "strategy": "V7.2_FROZEN",
         "symbols": PAPER_SYMBOLS,
@@ -1480,7 +1478,7 @@ def root():
 def health():
     return {
         "status": "healthy",
-        "version": "20.1.0",
+        "version": "20.1.1",
         "scheduler_running": scheduler.running,
     }
 
@@ -2303,18 +2301,12 @@ def _parse_tr_number(value: str):
     s = re.sub(r"[^0-9,.\-+]", "", s)
     if not s:
         raise ValueError("sayisal deger bos")
-    # Turkish format: 19.253,40
     if "," in s:
         s = s.replace(".", "").replace(",", ".")
     return float(s)
 
 
 def _download_xk050_borsa_istanbul():
-    """
-    Yahoo Finance XK050 verisini vermediginde resmi Borsa Istanbul sayfasindan
-    BIST KATILIM 50 satirini okur. Borsa Istanbul endeks sayfasindaki veriler
-    en az 15 dakika gecikmeli olabilir.
-    """
     urls = [
         "https://www.borsaistanbul.com/katilim-esasli-paylar-ve-pay-endeksleri",
         "https://www.borsaistanbul.com/endeksler",
@@ -2327,7 +2319,7 @@ def _download_xk050_borsa_istanbul():
                 url,
                 timeout=12,
                 headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; BIST-Katilim-Terminal/20.1)",
+                    "User-Agent": "Mozilla/5.0 (compatible; BIST-Katilim-Terminal/20.1.1)",
                     "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.6",
                 },
             )
@@ -2339,8 +2331,6 @@ def _download_xk050_borsa_istanbul():
             plain = re.sub(r"<[^>]+>", " ", plain)
             plain = re.sub(r"\s+", " ", plain).strip()
 
-            # Beklenen gorunur sira:
-            # BIST KATILIM 50 | XK050 | 25.09.2026 [HH:MM] | 19.253,40 | 1,66 | ...
             pattern = re.compile(
                 r"BIST\s+KATILIM\s+50\s+XK050\s+"
                 r"(\d{2}\.\d{2}\.\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?)?)\s+"
@@ -2361,13 +2351,9 @@ def _download_xk050_borsa_istanbul():
                     dt = datetime.strptime(asof_raw, fmt)
                     break
                 except ValueError:
-                    continue
+                    pass
 
-            asof = (
-                dt.replace(tzinfo=ISTANBUL_TZ).isoformat()
-                if dt is not None
-                else asof_raw
-            )
+            asof = dt.replace(tzinfo=ISTANBUL_TZ).isoformat() if dt else asof_raw
 
             return {
                 "ticker": "XK050",
@@ -2387,7 +2373,7 @@ def _download_xk050_borsa_istanbul():
 
 @app.get("/market-indexes")
 def market_indexes():
-    cache_key = "v20_1:indexes"
+    cache_key = "v20_1_1:indexes"
     cached = _cache_get(cache_key, ttl_seconds=120)
     if cached is not None:
         return cached
@@ -2423,8 +2409,6 @@ def market_indexes():
             else:
                 errors.append({"name": name, "message": str(yahoo_error)})
 
-    # Resmi XK050 degeri gecici olarak erisilemezse sadece gunluk degisim icin
-    # watchlist esit-agirlik proxy'si korunur. Endeks seviyesi UYDURULMAZ.
     if not any(x["name"] == "BIST KATILIM 50" for x in results):
         wl = _cache_get("v12:watchlist", ttl_seconds=180)
         if wl and wl.get("results"):
@@ -2456,6 +2440,317 @@ def market_indexes():
 
     _cache_set(cache_key, payload)
     return payload
+
+
+class AlertSettingsRequest(BaseModel):
+    enabled: bool = True
+    strong_candidate_enabled: bool = True
+    strong_candidate_min_score: int = 80
+    exact_v72_enabled: bool = True
+
+
+def _normalize_alert_settings(raw=None):
+    raw = raw or {}
+    score = int(raw.get("strong_candidate_min_score", 80))
+    score = max(60, min(100, score))
+    return {
+        "enabled": bool(raw.get("enabled", True)),
+        "strong_candidate_enabled": bool(raw.get("strong_candidate_enabled", True)),
+        "strong_candidate_min_score": score,
+        "exact_v72_enabled": bool(raw.get("exact_v72_enabled", True)),
+        "scan_every_minutes": 15,
+    }
+
+
+def _emit_system_alert(state, kind, title, message, payload, dedupe_key):
+    seen = state.setdefault("alert_seen_keys", [])
+    if dedupe_key in seen:
+        return False
+
+    seen.append(dedupe_key)
+    state["alert_seen_keys"] = seen[-1000:]
+
+    add_notification(
+        state,
+        kind,
+        title,
+        message,
+        payload,
+    )
+
+    try:
+        send_push_to_registered(
+            title,
+            message,
+            {
+                "kind": kind,
+                "url": "/",
+                "symbol": payload.get("symbol", ""),
+                "tag": f"alert-{kind.lower()}-{payload.get('symbol', '')}",
+            },
+        )
+    except Exception:
+        pass
+
+    return True
+
+
+def run_candidate_alert_scan(force=True):
+    with STATE_LOCK:
+        state = load_state()
+        settings = _normalize_alert_settings(state.get("alert_settings"))
+
+        if not settings["enabled"]:
+            result = {
+                "status": "disabled",
+                "alerts_created": 0,
+                "checked": 0,
+                "generated_at": now_utc_iso(),
+            }
+            state["last_alert_scan_at"] = result["generated_at"]
+            state["last_alert_scan_result"] = result
+            save_state(state)
+            return result
+
+    # Scanner kendi 5 dakikalik cache'ini kullanabilir; scheduler'da yeni bar icin force=True.
+    scan = scanner_candidates(
+        limit=50,
+        min_score=float(min(settings["strong_candidate_min_score"], 80)),
+        refresh=bool(force),
+    )
+
+    candidates = scan.get("results", [])
+    created = []
+    skipped = []
+
+    with STATE_LOCK:
+        state = load_state()
+        settings = _normalize_alert_settings(state.get("alert_settings"))
+
+        for item in candidates:
+            symbol = item.get("symbol", "")
+            bar_time = item.get("bar_time", "")
+            score = float(item.get("score") or 0)
+
+            if settings["exact_v72_enabled"] and item.get("exact_v72_signal"):
+                key = f"V72|{symbol}|{bar_time}"
+                title = f"{symbol} V7.2 sinyal kosullari tamam"
+                message = (
+                    f"Uyum {score:.0f}/100 | RSI {item.get('rsi')} | "
+                    f"ADX {item.get('adx')} | Hacim {item.get('volume_ratio')}x"
+                )
+                if _emit_system_alert(state, "V72_SIGNAL", title, message, item, key):
+                    created.append({"kind": "V72_SIGNAL", "symbol": symbol, "score": score})
+                else:
+                    skipped.append(key)
+                # Tam sinyal ayni barda ayrica guclu aday bildirimi uretmesin.
+                continue
+
+            if (
+                settings["strong_candidate_enabled"]
+                and score >= settings["strong_candidate_min_score"]
+            ):
+                key = f"STRONG|{symbol}|{bar_time}|{settings['strong_candidate_min_score']}"
+                title = f"{symbol} teknik uyum adayi"
+                message = (
+                    f"V7.2 kosul uyumu {score:.0f}/100 | "
+                    f"{item.get('passed_checks')}/{item.get('total_checks')} kosul"
+                )
+                if _emit_system_alert(state, "STRONG_CANDIDATE", title, message, item, key):
+                    created.append({"kind": "STRONG_CANDIDATE", "symbol": symbol, "score": score})
+                else:
+                    skipped.append(key)
+
+        result = {
+            "status": "ok",
+            "alerts_created": len(created),
+            "created": created,
+            "duplicates_skipped": len(skipped),
+            "checked": scan.get("scored_symbols", 0),
+            "regime_score": scan.get("regime_score"),
+            "scanner_errors": len(scan.get("errors", [])),
+            "generated_at": now_utc_iso(),
+        }
+
+        state["alert_settings"] = settings
+        state["last_alert_scan_at"] = result["generated_at"]
+        state["last_alert_scan_result"] = result
+        save_state(state)
+
+    return result
+
+
+def scheduled_candidate_alerts():
+    try:
+        run_candidate_alert_scan(force=True)
+    except Exception:
+        pass
+
+
+@app.get("/alerts/settings")
+def get_alert_settings():
+    with STATE_LOCK:
+        state = load_state()
+    return {
+        "status": "ok",
+        "settings": _normalize_alert_settings(state.get("alert_settings")),
+        "last_alert_scan_at": state.get("last_alert_scan_at"),
+        "last_alert_scan_result": state.get("last_alert_scan_result"),
+        "registered_push_tokens": len(load_push_tokens()),
+    }
+
+
+@app.post("/alerts/settings")
+def update_alert_settings(payload: AlertSettingsRequest):
+    settings = _normalize_alert_settings(payload.model_dump())
+    with STATE_LOCK:
+        state = load_state()
+        state["alert_settings"] = settings
+        save_state(state)
+    return {"status": "ok", "settings": settings}
+
+
+@app.post("/alerts/check-now")
+def alert_check_now():
+    return run_candidate_alert_scan(force=True)
+
+
+# ============================================================
+# V17 - GUCLU ADAY TARAYICI
+# Mevcut V7.2_FROZEN kosullarina "uyum" puani verir.
+# Bu puan al/sat tavsiyesi veya tahmin degildir.
+# ============================================================
+
+_SCANNER_CACHE = {}
+
+
+def _scanner_score_frame(symbol: str, df: pd.DataFrame, regime_score: int):
+    if df is None or df.empty:
+        raise ValueError("Veri bos")
+
+    df = df.copy()
+    df = flatten_columns(df)
+    df = make_index_naive(df).sort_index()
+
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        if col not in df.columns:
+            raise ValueError(f"Eksik kolon: {col}")
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+    df = enrich(df)
+
+    if len(df) < 3:
+        raise ValueError("Yetersiz teknik veri")
+
+    # Son bar tam kapanmamis olabilir; paper mantigi ile ayni sekilde
+    # bir onceki tamamlanmis bari puanliyoruz.
+    row = df.iloc[-2].copy()
+    prev = df.iloc[-3].copy()
+    row["REGIME_SCORE"] = int(regime_score)
+
+    checks = {
+        "piyasa_rejimi": bool(row["REGIME_SCORE"] >= 1),
+        "trend": bool(trend_is_up(row)),
+        "rsi": bool(FILTERS["rsi_min"] <= row["RSI"] <= FILTERS["rsi_max"]),
+        "adx": bool(row["ADX"] >= FILTERS["adx_min"]),
+        "hacim": bool(row["VOL_RATIO"] >= FILTERS["vol_ratio_min"]),
+        "hacim_ortalamasi": bool(row["VOL5_TO_VOL20"] >= FILTERS["vol5_to_vol20_min"]),
+        "ema20_mesafe": bool(
+            FILTERS["dist_ema20_atr_min"]
+            <= row["DIST_EMA20_ATR"]
+            <= FILTERS["dist_ema20_atr_max"]
+        ),
+        "atr": bool(FILTERS["atr_pct_min"] <= row["ATR_PCT"] <= FILTERS["atr_pct_max"]),
+        "macd_ivme": bool(row["MACD_HIST"] > prev["MACD_HIST"]),
+        "pozitif_mum": bool(row["Close"] > row["Open"]),
+    }
+
+    passed = sum(1 for v in checks.values() if v)
+    total = len(checks)
+    score = round((passed / total) * 100, 1)
+
+    exact_signal = bool(
+        checks["piyasa_rejimi"]
+        and checks["trend"]
+        and checks["rsi"]
+        and checks["adx"]
+        and checks["hacim"]
+        and checks["hacim_ortalamasi"]
+        and checks["ema20_mesafe"]
+        and checks["atr"]
+        and checks["macd_ivme"]
+        and checks["pozitif_mum"]
+    )
+
+    if exact_signal:
+        level = "V7.2_SINYAL"
+    elif score >= 80:
+        level = "GUCLU_ADAY"
+    elif score >= 60:
+        level = "IZLE"
+    else:
+        level = "ZAYIF"
+
+    return {
+        "symbol": symbol,
+        "score": score,
+        "passed_checks": passed,
+        "total_checks": total,
+        "level": level,
+        "exact_v72_signal": exact_signal,
+        "price": _safe_num(row["Close"], 4),
+        "bar_time": str(df.index[-2]),
+        "rsi": _safe_num(row["RSI"], 2),
+        "adx": _safe_num(row["ADX"], 2),
+        "macd_hist": _safe_num(row["MACD_HIST"], 4),
+        "volume_ratio": _safe_num(row["VOL_RATIO"], 2),
+        "vol5_to_vol20": _safe_num(row["VOL5_TO_VOL20"], 2),
+        "atr_pct": _safe_num(row["ATR_PCT"], 2),
+        "dist_ema20_atr": _safe_num(row["DIST_EMA20_ATR"], 2),
+        "ema20": _safe_num(row["EMA20"], 4),
+        "ema50": _safe_num(row["EMA50"], 4),
+        "ema200": _safe_num(row["EMA200"], 4),
+        "regime_score": int(regime_score),
+        "checks": checks,
+    }
+
+
+def _scanner_bulk_chunk(symbols, regime_score):
+    tickers = [normalize_symbol(s) for s in symbols]
+    raw = yf.download(
+        tickers=tickers,
+        period="90d",
+        interval="1h",
+        group_by="ticker",
+        auto_adjust=False,
+        progress=False,
+        threads=True,
+    )
+
+    results = []
+    errors = []
+
+    if raw.empty:
+        return [], [{"symbol": s, "message": "Toplu 1h veri bos"} for s in symbols]
+
+    if len(symbols) == 1 and not isinstance(raw.columns, pd.MultiIndex):
+        try:
+            results.append(_scanner_score_frame(symbols[0], raw, regime_score))
+        except Exception as e:
+            errors.append({"symbol": symbols[0], "message": str(e)})
+        return results, errors
+
+    for symbol, ticker in zip(symbols, tickers):
+        try:
+            sub = _extract_bulk_symbol(raw, ticker)
+            if sub is None or sub.empty:
+                raise ValueError("Toplu cevapta veri yok")
+            results.append(_scanner_score_frame(symbol, sub, regime_score))
+        except Exception as e:
+            errors.append({"symbol": symbol, "message": str(e)})
+
+    return results, errors
 
 
 @app.get("/scanner/candidates")
