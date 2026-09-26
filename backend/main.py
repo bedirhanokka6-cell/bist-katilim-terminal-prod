@@ -33,7 +33,7 @@ load_dotenv()
 
 app = FastAPI(
     title="BIST Katilim Terminal API",
-    version="20.1.2",
+    version="20.1.3",
     description="V7.2 frozen strategy + automatic paper scan + isolated paper test mode + Istanbul time + XK050 fallback"
 )
 
@@ -125,7 +125,7 @@ def _to_istanbul_iso(value):
 
 def default_state():
     return {
-        "version": "20.1.2",
+        "version": "20.1.3",
         "started_at": now_utc_iso(),
         "strategy": "V7.2_FROZEN",
         "symbols": PAPER_SYMBOLS,
@@ -1478,7 +1478,7 @@ def root():
 def health():
     return {
         "status": "healthy",
-        "version": "20.1.2",
+        "version": "20.1.3",
         "scheduler_running": scheduler.running,
     }
 
@@ -2308,147 +2308,63 @@ def _parse_tr_number(value: str):
 
 def _download_xk050_borsa_istanbul():
     """
-    Yahoo Finance XK050 verisini vermediginde resmi Borsa Istanbul sayfasindan
+    Yahoo Finance XK050 verisini vermediginde resmi Borsa Istanbul
+    Katilim Esasli Paylar ve Pay Endeksleri sayfasindaki ozet tablodan
     BIST KATILIM 50 satirini okur.
     """
-    urls = [
-        "https://www.borsaistanbul.com/katilim-esasli-paylar-ve-pay-endeksleri",
-        "https://www.borsaistanbul.com/endeksler",
-    ]
-    last_error = None
+    url = "https://www.borsaistanbul.com/katilim-esasli-paylar-ve-pay-endeksleri"
 
-    for url in urls:
-        try:
-            r = requests.get(
-                url,
-                timeout=12,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; BIST-Katilim-Terminal/20.1.2)",
-                    "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.6",
-                },
-            )
-            r.raise_for_status()
+    r = requests.get(
+        url,
+        timeout=15,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; BIST-Katilim-Terminal/20.1.3)",
+            "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.6",
+        },
+    )
+    r.raise_for_status()
 
-            raw = html.unescape(r.text)
+    raw = html.unescape(r.text)
 
-            # Once tablo satirlarini ayri ayri yakala. Borsa Istanbul sayfasi
-            # hucreler arasina beklenmedik bosluk/etiket koyabildigi icin
-            # tam sayfa tek regex yerine satir-temelli parse daha dayaniklidir.
-            rows = re.findall(r"<tr\b[^>]*>(.*?)</tr>", raw, flags=re.I | re.S)
-            candidates = []
+    # Resmi sayfanin gorunur ozet tablosu su siradadir:
+    # Endeks | Son Deger | Islem Hacmi (TL) | Bugun (%) | ...
+    # HTML yapisi degisebildigi icin once duz metne cevirip bu tablo satirini yakalariz.
+    plain = re.sub(r"<script\b[^>]*>.*?</script>", " ", raw, flags=re.I | re.S)
+    plain = re.sub(r"<style\b[^>]*>.*?</style>", " ", plain, flags=re.I | re.S)
+    plain = re.sub(r"<[^>]+>", " ", plain)
+    plain = re.sub(r"\s+", " ", html.unescape(plain)).strip()
 
-            for row in rows:
-                cells = re.findall(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", row, flags=re.I | re.S)
-                clean = []
-                for cell in cells:
-                    s = re.sub(r"<[^>]+>", " ", cell)
-                    s = re.sub(r"\s+", " ", html.unescape(s)).strip()
-                    clean.append(s)
+    # Ornek gorunur yapi:
+    # BIST KATILIM 50 18.674,85 90.002.524.720 -3,01 -0,16 ...
+    m = re.search(
+        r"BIST\s+KATILIM\s+50\s+"
+        r"([0-9.]+,[0-9]+)\s+"          # Son Deger
+        r"([0-9.]+)\s+"                  # Islem Hacmi
+        r"([+\-]?[0-9]+,[0-9]+)",        # Bugun %
+        plain,
+        flags=re.I,
+    )
+    if not m:
+        raise ValueError("Borsa Istanbul XK050 ozet tablo satiri ayrıştırılamadi")
 
-                joined = " | ".join(clean)
-                if "XK050" in joined.upper() and "KATILIM 50" in joined.upper():
-                    candidates.append(clean)
+    value_raw, volume_raw, change_raw = m.groups()
+    value = _parse_tr_number(value_raw)
+    change = _parse_tr_number(change_raw)
 
-            for clean in candidates:
-                # Beklenen resmi tablo sirasi:
-                # Endeks Adi | Endeks Kodu | Son Guncelleme | Guncel Deger | Degisim (%) | ...
-                try:
-                    code_idx = next(i for i, v in enumerate(clean) if v.upper() == "XK050")
-                except StopIteration:
-                    continue
+    # Sayfa bu ozet tabloda saat damgasi vermiyor; endpointin cekildigi Istanbul
+    # zamani "asof" olarak kullanilir ve delayed=true ile acikca isaretlenir.
+    asof = datetime.now(ISTANBUL_TZ).isoformat()
 
-                tail = clean[code_idx + 1:]
-                if len(tail) < 3:
-                    continue
-
-                # Ilk tarih, ardindan ilk iki sayisal hucre: deger ve degisim.
-                date_idx = None
-                for i, v in enumerate(tail):
-                    if re.search(r"\d{2}\.\d{2}\.\d{4}", v):
-                        date_idx = i
-                        break
-                if date_idx is None:
-                    continue
-
-                asof_raw = tail[date_idx]
-                numeric_cells = []
-                for v in tail[date_idx + 1:]:
-                    if re.fullmatch(r"[+\-]?\d[\d.]*,\d+", v.strip()):
-                        numeric_cells.append(v.strip())
-                    if len(numeric_cells) >= 2:
-                        break
-
-                if len(numeric_cells) < 2:
-                    continue
-
-                value = _parse_tr_number(numeric_cells[0])
-                change = _parse_tr_number(numeric_cells[1])
-
-                dt = None
-                for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
-                    try:
-                        dt = datetime.strptime(asof_raw, fmt)
-                        break
-                    except ValueError:
-                        pass
-
-                asof = dt.replace(tzinfo=ISTANBUL_TZ).isoformat() if dt else asof_raw
-
-                return {
-                    "ticker": "XK050",
-                    "value": round(value, 4),
-                    "daily_change_pct": round(change, 3),
-                    "asof": asof,
-                    "proxy": False,
-                    "source": "Borsa Istanbul",
-                    "delayed": True,
-                    "delay_note": "Borsa Istanbul endeks verileri en az 15 dakika gecikmeli olabilir.",
-                }
-
-            # Son fallback: sayfayi duz metne cevirip XK050 sonrasindaki tarih/deger/% degisim uclusunu ara.
-            plain = re.sub(r"<script\b[^>]*>.*?</script>", " ", raw, flags=re.I | re.S)
-            plain = re.sub(r"<style\b[^>]*>.*?</style>", " ", plain, flags=re.I | re.S)
-            plain = re.sub(r"<[^>]+>", " ", plain)
-            plain = re.sub(r"\s+", " ", html.unescape(plain)).strip()
-
-            m = re.search(
-                r"BIST\s+KATILIM\s+50.{0,120}?XK050.{0,120}?"
-                r"(\d{2}\.\d{2}\.\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?)?).{0,80}?"
-                r"([0-9.]+,[0-9]+).{0,50}?([+\-]?[0-9]+,[0-9]+)",
-                plain,
-                flags=re.I,
-            )
-            if m:
-                asof_raw, value_raw, change_raw = m.groups()
-                value = _parse_tr_number(value_raw)
-                change = _parse_tr_number(change_raw)
-
-                dt = None
-                for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
-                    try:
-                        dt = datetime.strptime(asof_raw, fmt)
-                        break
-                    except ValueError:
-                        pass
-
-                asof = dt.replace(tzinfo=ISTANBUL_TZ).isoformat() if dt else asof_raw
-
-                return {
-                    "ticker": "XK050",
-                    "value": round(value, 4),
-                    "daily_change_pct": round(change, 3),
-                    "asof": asof,
-                    "proxy": False,
-                    "source": "Borsa Istanbul",
-                    "delayed": True,
-                    "delay_note": "Borsa Istanbul endeks verileri en az 15 dakika gecikmeli olabilir.",
-                }
-
-            raise ValueError("Borsa Istanbul XK050 satiri ayrıştırılamadi")
-        except Exception as e:
-            last_error = e
-
-    raise ValueError(str(last_error) if last_error else "Borsa Istanbul XK050 verisi bulunamadi")
+    return {
+        "ticker": "XK050",
+        "value": round(value, 4),
+        "daily_change_pct": round(change, 3),
+        "asof": asof,
+        "proxy": False,
+        "source": "Borsa Istanbul",
+        "delayed": True,
+        "delay_note": "Borsa Istanbul endeks degerleri en az 15 dakika gecikmeli olabilir.",
+    }
 
 
 @app.get("/market-indexes")
