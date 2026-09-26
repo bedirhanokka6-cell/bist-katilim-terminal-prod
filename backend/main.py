@@ -115,6 +115,18 @@ FILTERS_V73B = {
     "regime_score_min": 1,
 }
 
+# V7.3C: experimental entry-quality upgrade based on multi-seed review.
+# It keeps V7.3B's broad filter envelope, but requires stronger momentum
+# confirmation and blocks the consistently weak 13:00 Istanbul signal hour.
+# Live paper trading is NOT changed.
+FILTERS_V73C = {
+    **FILTERS_V73B,
+    "blocked_istanbul_hours": [13],
+    "require_positive_macd_hist": True,
+    "require_rsi_rising": True,
+    "require_close_above_prev_close": True,
+}
+
 PAPER_CONFIG = {
     "fee_bps_each_side": 10.0,
     "slippage_bps_each_side": 5.0,
@@ -201,7 +213,7 @@ def load_state():
     state["symbols"] = PAPER_SYMBOLS
     state["total_universe"] = len(PAPER_SYMBOLS)
     state.setdefault("strategy", "V7.2_FROZEN")
-    state["version"] = "25.0.0"
+    state["version"] = "26.0.0"
     save_state(state)
     return state
 
@@ -514,6 +526,43 @@ def pullback_signal_v73b(row, prev):
             <= row["DIST_EMA20_ATR"]
             <= FILTERS_V73B["dist_ema20_atr_max"]
         and row["MACD_HIST"] > prev["MACD_HIST"]
+        and row["Close"] > row["Open"]
+    )
+
+
+def _istanbul_hour_from_index(ts):
+    """Convert a historical dataframe index timestamp to Istanbul hour."""
+    t = pd.Timestamp(ts)
+    if t.tzinfo is None:
+        t = t.tz_localize("UTC")
+    return int(t.tz_convert("Europe/Istanbul").hour)
+
+
+def pullback_signal_v73c(row, prev, signal_ts):
+    """V7.3C: V7.3B + stronger momentum confirmation + 13:00 block."""
+    try:
+        ist_hour = _istanbul_hour_from_index(signal_ts)
+    except Exception:
+        ist_hour = None
+
+    if ist_hour in FILTERS_V73C["blocked_istanbul_hours"]:
+        return False
+
+    return (
+        row["REGIME_SCORE"] >= FILTERS_V73C["regime_score_min"]
+        and trend_is_up(row)
+        and FILTERS_V73C["rsi_min"] <= row["RSI"] <= FILTERS_V73C["rsi_max"]
+        and row["ADX"] >= FILTERS_V73C["adx_min"]
+        and row["VOL_RATIO"] >= FILTERS_V73C["vol_ratio_min"]
+        and row["VOL5_TO_VOL20"] >= FILTERS_V73C["vol5_to_vol20_min"]
+        and FILTERS_V73C["atr_pct_min"] <= row["ATR_PCT"] <= FILTERS_V73C["atr_pct_max"]
+        and FILTERS_V73C["dist_ema20_atr_min"]
+            <= row["DIST_EMA20_ATR"]
+            <= FILTERS_V73C["dist_ema20_atr_max"]
+        and row["MACD_HIST"] > prev["MACD_HIST"]
+        and row["MACD_HIST"] > 0
+        and row["RSI"] > prev["RSI"]
+        and row["Close"] > prev["Close"]
         and row["Close"] > row["Open"]
     )
 
@@ -2078,6 +2127,155 @@ def random_history_backtest_v73b(
             "Sinyal kapanmis 1 saatlik mumda hesaplanir; giris bir sonraki mumun acilisidir.",
             "Stop/hedef ayni mumda birlikte gorulurse konservatif olarak STOP once kabul edilir.",
             "Komisyon ve slippage paper trading ile aynidir.",
+            "Bu endpoint gercek paper_state.json dosyasini degistirmez.",
+        ],
+    }
+
+
+@app.post("/backtest/random-history-v73c")
+def random_history_backtest_v73c(
+    tests: int = Query(100, ge=5, le=100),
+    symbol_count: int = Query(30, ge=3, le=50),
+    seed: int = Query(72, ge=0, le=999999),
+):
+    """
+    V7.3C experimental historical test.
+
+    Compared with V7.3B:
+    - blocks 13:00 Europe/Istanbul signals,
+    - requires MACD histogram > 0 and rising,
+    - requires RSI rising,
+    - requires close > previous close,
+    - keeps non-overlapping trades per symbol.
+    """
+    rng = np.random.default_rng(seed)
+    symbols = list(PAPER_SYMBOLS)
+    if symbol_count < len(symbols):
+        selected = sorted(rng.choice(symbols, size=symbol_count, replace=False).tolist())
+    else:
+        selected = symbols
+
+    benchmark, regime = fetch_benchmark_daily()
+    candidates = []
+    errors = []
+    skipped_overlapping = 0
+    blocked_by_hour = 0
+
+    for symbol in selected:
+        try:
+            raw = fetch_data(symbol, "1h")
+            enriched = enrich(raw)
+            df = _attach_precomputed_regime(enriched, regime)
+            if len(df) < 5:
+                continue
+
+            blocked_until = None
+
+            for i in range(1, len(df) - 1):
+                signal_ts = pd.Timestamp(df.index[i])
+
+                if blocked_until is not None and signal_ts <= blocked_until:
+                    skipped_overlapping += 1
+                    continue
+
+                try:
+                    if _istanbul_hour_from_index(signal_ts) in FILTERS_V73C["blocked_istanbul_hours"]:
+                        blocked_by_hour += 1
+                        continue
+                except Exception:
+                    pass
+
+                if pullback_signal_v73c(df.iloc[i], df.iloc[i - 1], signal_ts):
+                    trade = _simulate_historical_trade(df, i, symbol)
+                    if trade is not None:
+                        candidates.append(trade)
+                        try:
+                            blocked_until = pd.Timestamp(trade["exit_time"])
+                        except Exception:
+                            blocked_until = signal_ts
+        except Exception as e:
+            errors.append({"symbol": symbol, "message": str(e)})
+
+    if not candidates:
+        return {
+            "status": "ok",
+            "strategy": "V7.3C_EXPERIMENTAL",
+            "mode": "RANDOM_HISTORICAL_ISOLATED_NON_OVERLAP",
+            "real_paper_state_changed": False,
+            "seed": seed,
+            "benchmark": benchmark,
+            "timeframe": "1h",
+            "requested_tests": tests,
+            "selected_symbols": selected,
+            "candidate_signal_count": 0,
+            "sampled_trade_count": 0,
+            "skipped_overlapping_signals": skipped_overlapping,
+            "blocked_by_hour_count": blocked_by_hour,
+            "filters": FILTERS_V73C,
+            "trades": [],
+            "metrics": {},
+            "errors": errors,
+            "message": "Secilen sembollerde tamamlanmis tarihsel V7.3C sinyali bulunamadi.",
+        }
+
+    take = min(tests, len(candidates))
+    idxs = rng.choice(len(candidates), size=take, replace=False)
+    trades = [candidates[int(i)] for i in idxs]
+    trades.sort(key=lambda x: x["signal_time"])
+
+    returns = np.array([t["net_return_pct"] / 100.0 for t in trades], dtype=float)
+    wins = returns[returns > 0]
+    losses = returns[returns <= 0]
+    gp = float(wins.sum()) if len(wins) else 0.0
+    gl = abs(float(losses.sum())) if len(losses) else 0.0
+    pf = gp / gl if gl > 0 else None
+
+    equity = 1.0
+    peak = 1.0
+    max_dd = 0.0
+    for r in returns:
+        equity *= 1 + r
+        peak = max(peak, equity)
+        dd = equity / peak - 1.0
+        max_dd = min(max_dd, dd)
+
+    metrics = {
+        "closed_trades": int(len(trades)),
+        "wins": int((returns > 0).sum()),
+        "losses": int((returns <= 0).sum()),
+        "win_rate_pct": round(float((returns > 0).mean() * 100), 2),
+        "expectancy_pct_per_trade": round(float(returns.mean() * 100), 3),
+        "profit_factor": round(pf, 3) if pf is not None else None,
+        "total_compounded_return_pct": round((equity - 1) * 100, 2),
+        "max_drawdown_pct": round(max_dd * 100, 2),
+    }
+
+    return {
+        "status": "ok",
+        "strategy": "V7.3C_EXPERIMENTAL",
+        "mode": "RANDOM_HISTORICAL_ISOLATED_NON_OVERLAP",
+        "real_paper_state_changed": False,
+        "seed": seed,
+        "benchmark": benchmark,
+        "timeframe": "1h",
+        "requested_tests": tests,
+        "selected_symbols": selected,
+        "candidate_signal_count": len(candidates),
+        "sampled_trade_count": len(trades),
+        "skipped_overlapping_signals": skipped_overlapping,
+        "blocked_by_hour_count": blocked_by_hour,
+        "filters": FILTERS_V73C,
+        "config": PAPER_CONFIG,
+        "metrics": metrics,
+        "trades": trades,
+        "errors": errors,
+        "notes": [
+            "V7.3C sadece deneysel gecmis testidir; canli paper V7.2_FROZEN olarak kalir.",
+            "13:00 Europe/Istanbul sinyalleri seed 72/73/74 ortak zayiflik nedeniyle filtrelenir.",
+            "MACD histogram pozitif ve yukseliyor olmali.",
+            "RSI bir onceki mumdan yuksek olmali.",
+            "Kapanis bir onceki kapanistan yuksek olmali.",
+            "Ayni hissede onceki test islemi kapanmadan yeni test islemi acilmaz.",
             "Bu endpoint gercek paper_state.json dosyasini degistirmez.",
         ],
     }
