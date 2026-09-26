@@ -201,7 +201,7 @@ def load_state():
     state["symbols"] = PAPER_SYMBOLS
     state["total_universe"] = len(PAPER_SYMBOLS)
     state.setdefault("strategy", "V7.2_FROZEN")
-    state["version"] = "24.0.0"
+    state["version"] = "25.0.0"
     save_state(state)
     return state
 
@@ -2138,7 +2138,7 @@ def analyze_v73b(
         return {
             "status": "ok",
             "strategy": "V7.3B_EXPERIMENTAL",
-            "mode": "ANALYZE_V73B",
+            "mode": "ANALYZE_V73B_ISTANBUL_TIME",
             "real_paper_state_changed": False,
             "seed": seed,
             "requested_tests": tests,
@@ -2158,7 +2158,13 @@ def analyze_v73b(
         signal_time = str(trade.get("signal_time", ""))
         hour = "UNKNOWN"
         try:
-            hour = signal_time.split(" ")[1].split(":")[0] + ":00"
+            ts = pd.Timestamp(signal_time)
+            # Historical Yahoo timestamps in this test are stored without timezone.
+            # Interpret naive values as UTC, then convert to Europe/Istanbul.
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            ts_ist = ts.tz_convert("Europe/Istanbul")
+            hour = f"{ts_ist.hour:02d}:00"
         except Exception:
             pass
         by_hour.setdefault(hour, []).append(trade)
@@ -2180,7 +2186,7 @@ def analyze_v73b(
     return {
         "status": "ok",
         "strategy": "V7.3B_EXPERIMENTAL",
-        "mode": "ANALYZE_V73B",
+        "mode": "ANALYZE_V73B_ISTANBUL_TIME",
         "real_paper_state_changed": False,
         "seed": seed,
         "requested_tests": tests,
@@ -2199,6 +2205,7 @@ def analyze_v73b(
         "errors": base.get("errors", []),
         "notes": [
             "Bu analiz ayni V7.3B seed ve orneklemesini kullanir.",
+            "Saat istatistikleri Europe/Istanbul saatine cevrilmistir.",
             "Sembol listelerinde en az 3 islem, saat listelerinde en az 5 islem kosulu vardir.",
             "Tek bir seed'e gore filtre karari vermek overfit riski tasir; 72, 73 ve 74 birlikte incelenmelidir.",
             "Canli paper trading V7.2_FROZEN olarak kalir.",
