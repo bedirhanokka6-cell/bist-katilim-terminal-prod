@@ -201,7 +201,7 @@ def load_state():
     state["symbols"] = PAPER_SYMBOLS
     state["total_universe"] = len(PAPER_SYMBOLS)
     state.setdefault("strategy", "V7.2_FROZEN")
-    state["version"] = "23.0.0"
+    state["version"] = "24.0.0"
     save_state(state)
     return state
 
@@ -2079,6 +2079,129 @@ def random_history_backtest_v73b(
             "Stop/hedef ayni mumda birlikte gorulurse konservatif olarak STOP once kabul edilir.",
             "Komisyon ve slippage paper trading ile aynidir.",
             "Bu endpoint gercek paper_state.json dosyasini degistirmez.",
+        ],
+    }
+
+
+def _trade_group_stats(rows):
+    if not rows:
+        return {
+            "trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "win_rate_pct": 0.0,
+            "avg_return_pct": 0.0,
+            "total_return_pct_simple": 0.0,
+            "profit_factor": None,
+        }
+
+    rets = [float(r.get("net_return_pct", 0.0)) for r in rows]
+    wins = [r for r in rets if r > 0]
+    losses = [r for r in rets if r <= 0]
+    gross_profit = sum(wins)
+    gross_loss = abs(sum(losses))
+    pf = (gross_profit / gross_loss) if gross_loss > 0 else None
+
+    return {
+        "trades": len(rows),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate_pct": round((len(wins) / len(rows)) * 100, 2),
+        "avg_return_pct": round(sum(rets) / len(rets), 3),
+        "total_return_pct_simple": round(sum(rets), 3),
+        "profit_factor": round(pf, 3) if pf is not None else None,
+    }
+
+
+@app.post("/backtest/analyze-v73b")
+def analyze_v73b(
+    tests: int = Query(100, ge=5, le=100),
+    symbol_count: int = Query(30, ge=3, le=50),
+    seed: int = Query(72, ge=0, le=999999),
+):
+    """
+    Analyze the exact V7.3B sampled historical trades by:
+    - symbol
+    - signal hour
+    - exit reason
+
+    This is analysis-only and never changes live paper state.
+    """
+    base = random_history_backtest_v73b(
+        tests=tests,
+        symbol_count=symbol_count,
+        seed=seed,
+    )
+
+    trades = base.get("trades", []) if isinstance(base, dict) else []
+    if not trades:
+        return {
+            "status": "ok",
+            "strategy": "V7.3B_EXPERIMENTAL",
+            "mode": "ANALYZE_V73B",
+            "real_paper_state_changed": False,
+            "seed": seed,
+            "requested_tests": tests,
+            "sampled_trade_count": 0,
+            "message": "Analiz edilecek V7.3B islemi bulunamadi.",
+            "source_backtest": base,
+        }
+
+    by_symbol = {}
+    by_hour = {}
+    by_exit = {}
+
+    for trade in trades:
+        symbol = str(trade.get("symbol", "UNKNOWN"))
+        by_symbol.setdefault(symbol, []).append(trade)
+
+        signal_time = str(trade.get("signal_time", ""))
+        hour = "UNKNOWN"
+        try:
+            hour = signal_time.split(" ")[1].split(":")[0] + ":00"
+        except Exception:
+            pass
+        by_hour.setdefault(hour, []).append(trade)
+
+        exit_reason = str(trade.get("exit_reason", "UNKNOWN"))
+        by_exit.setdefault(exit_reason, []).append(trade)
+
+    symbol_stats = [{"symbol": k, **_trade_group_stats(v)} for k, v in by_symbol.items()]
+    hour_stats = [{"signal_hour": k, **_trade_group_stats(v)} for k, v in by_hour.items()]
+    exit_stats = [{"exit_reason": k, **_trade_group_stats(v)} for k, v in by_exit.items()]
+
+    symbol_stats.sort(key=lambda x: (x["total_return_pct_simple"], x["avg_return_pct"]))
+    hour_stats.sort(key=lambda x: (x["total_return_pct_simple"], x["avg_return_pct"]))
+    exit_stats.sort(key=lambda x: (x["total_return_pct_simple"], x["avg_return_pct"]))
+
+    enough_symbol = [x for x in symbol_stats if x["trades"] >= 3]
+    enough_hour = [x for x in hour_stats if x["trades"] >= 5]
+
+    return {
+        "status": "ok",
+        "strategy": "V7.3B_EXPERIMENTAL",
+        "mode": "ANALYZE_V73B",
+        "real_paper_state_changed": False,
+        "seed": seed,
+        "requested_tests": tests,
+        "sampled_trade_count": len(trades),
+        "overall_metrics": base.get("metrics", {}),
+        "candidate_signal_count": base.get("candidate_signal_count"),
+        "skipped_overlapping_signals": base.get("skipped_overlapping_signals"),
+        "filters": base.get("filters", {}),
+        "worst_symbols_min_3_trades": enough_symbol[:5],
+        "best_symbols_min_3_trades": list(reversed(enough_symbol[-5:])),
+        "worst_signal_hours_min_5_trades": enough_hour[:5],
+        "best_signal_hours_min_5_trades": list(reversed(enough_hour[-5:])),
+        "exit_reason_stats": exit_stats,
+        "all_symbol_stats": symbol_stats,
+        "all_signal_hour_stats": hour_stats,
+        "errors": base.get("errors", []),
+        "notes": [
+            "Bu analiz ayni V7.3B seed ve orneklemesini kullanir.",
+            "Sembol listelerinde en az 3 islem, saat listelerinde en az 5 islem kosulu vardir.",
+            "Tek bir seed'e gore filtre karari vermek overfit riski tasir; 72, 73 ve 74 birlikte incelenmelidir.",
+            "Canli paper trading V7.2_FROZEN olarak kalir.",
         ],
     }
 
