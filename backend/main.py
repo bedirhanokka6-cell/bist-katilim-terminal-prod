@@ -213,7 +213,7 @@ def load_state():
     state["symbols"] = PAPER_SYMBOLS
     state["total_universe"] = len(PAPER_SYMBOLS)
     state.setdefault("strategy", "V7.2_FROZEN")
-    state["version"] = "26.0.0"
+    state["version"] = "27.0.0"
     save_state(state)
     return state
 
@@ -528,6 +528,27 @@ def pullback_signal_v73b(row, prev):
         and row["MACD_HIST"] > prev["MACD_HIST"]
         and row["Close"] > row["Open"]
     )
+
+
+def _v73b_variant_signal(row, prev, signal_ts, variant):
+    """V7.3B base plus exactly one experimental extra rule."""
+    base = pullback_signal_v73b(row, prev)
+    if not base:
+        return False
+
+    if variant == "BASE_V73B":
+        return True
+    if variant == "BLOCK_13_IST":
+        try:
+            return _istanbul_hour_from_index(signal_ts) != 13
+        except Exception:
+            return True
+    if variant == "MACD_POSITIVE":
+        return row["MACD_HIST"] > 0
+    if variant == "RSI_RISING":
+        return row["RSI"] > prev["RSI"]
+
+    return False
 
 
 def _istanbul_hour_from_index(ts):
@@ -2277,6 +2298,158 @@ def random_history_backtest_v73c(
             "Kapanis bir onceki kapanistan yuksek olmali.",
             "Ayni hissede onceki test islemi kapanmadan yeni test islemi acilmaz.",
             "Bu endpoint gercek paper_state.json dosyasini degistirmez.",
+        ],
+    }
+
+
+def _calc_trade_metrics_v27(trades):
+    if not trades:
+        return {
+            "closed_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "win_rate_pct": 0.0,
+            "expectancy_pct_per_trade": 0.0,
+            "profit_factor": None,
+            "total_compounded_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+        }
+
+    returns = np.array([t["net_return_pct"] / 100.0 for t in trades], dtype=float)
+    wins = returns[returns > 0]
+    losses = returns[returns <= 0]
+    gp = float(wins.sum()) if len(wins) else 0.0
+    gl = abs(float(losses.sum())) if len(losses) else 0.0
+    pf = gp / gl if gl > 0 else None
+
+    equity = 1.0
+    peak = 1.0
+    max_dd = 0.0
+    for r in returns:
+        equity *= 1 + r
+        peak = max(peak, equity)
+        max_dd = min(max_dd, equity / peak - 1.0)
+
+    return {
+        "closed_trades": int(len(trades)),
+        "wins": int((returns > 0).sum()),
+        "losses": int((returns <= 0).sum()),
+        "win_rate_pct": round(float((returns > 0).mean() * 100), 2),
+        "expectancy_pct_per_trade": round(float(returns.mean() * 100), 3),
+        "profit_factor": round(pf, 3) if pf is not None else None,
+        "total_compounded_return_pct": round((equity - 1) * 100, 2),
+        "max_drawdown_pct": round(max_dd * 100, 2),
+    }
+
+
+def _run_v73b_variant(selected, regime, variant, tests, seed):
+    candidates = []
+    errors = []
+    skipped_overlapping = 0
+
+    for symbol in selected:
+        try:
+            raw = fetch_data(symbol, "1h")
+            enriched = enrich(raw)
+            df = _attach_precomputed_regime(enriched, regime)
+            if len(df) < 5:
+                continue
+
+            blocked_until = None
+            for i in range(1, len(df) - 1):
+                signal_ts = pd.Timestamp(df.index[i])
+
+                if blocked_until is not None and signal_ts <= blocked_until:
+                    skipped_overlapping += 1
+                    continue
+
+                if _v73b_variant_signal(df.iloc[i], df.iloc[i - 1], signal_ts, variant):
+                    trade = _simulate_historical_trade(df, i, symbol)
+                    if trade is not None:
+                        candidates.append(trade)
+                        try:
+                            blocked_until = pd.Timestamp(trade["exit_time"])
+                        except Exception:
+                            blocked_until = signal_ts
+        except Exception as e:
+            errors.append({"symbol": symbol, "message": str(e)})
+
+    take = min(tests, len(candidates))
+    if take > 0:
+        variant_seed = seed + sum(ord(c) for c in variant)
+        rng = np.random.default_rng(variant_seed)
+        idxs = rng.choice(len(candidates), size=take, replace=False)
+        trades = [candidates[int(i)] for i in idxs]
+        trades.sort(key=lambda x: x["signal_time"])
+    else:
+        trades = []
+
+    return {
+        "variant": variant,
+        "candidate_signal_count": len(candidates),
+        "sampled_trade_count": len(trades),
+        "skipped_overlapping_signals": skipped_overlapping,
+        "metrics": _calc_trade_metrics_v27(trades),
+        "errors": errors,
+    }
+
+
+@app.post("/backtest/compare-strategies")
+def compare_strategies(
+    tests: int = Query(100, ge=5, le=100),
+    symbol_count: int = Query(30, ge=3, le=50),
+    seed: int = Query(72, ge=0, le=999999),
+):
+    """
+    Compare V7.3B against one-rule-at-a-time variants.
+    Live paper trading remains V7.2_FROZEN.
+    """
+    rng = np.random.default_rng(seed)
+    symbols = list(PAPER_SYMBOLS)
+
+    if symbol_count < len(symbols):
+        selected = sorted(rng.choice(symbols, size=symbol_count, replace=False).tolist())
+    else:
+        selected = symbols
+
+    benchmark, regime = fetch_benchmark_daily()
+
+    variants = [
+        "BASE_V73B",
+        "BLOCK_13_IST",
+        "MACD_POSITIVE",
+        "RSI_RISING",
+    ]
+
+    results = [
+        _run_v73b_variant(
+            selected=selected,
+            regime=regime,
+            variant=variant,
+            tests=tests,
+            seed=seed,
+        )
+        for variant in variants
+    ]
+
+    return {
+        "status": "ok",
+        "mode": "V73B_SINGLE_RULE_AB_COMPARISON",
+        "real_paper_state_changed": False,
+        "seed": seed,
+        "timeframe": "1h",
+        "benchmark": benchmark,
+        "requested_tests": tests,
+        "symbol_count": len(selected),
+        "selected_symbols": selected,
+        "base_filters": FILTERS_V73B,
+        "variants": results,
+        "notes": [
+            "Canli paper trading V7.2_FROZEN olarak kalir.",
+            "Her varyant V7.3B tabanina yalnizca bir ek kural uygular.",
+            "Ayni sembol secimi, benchmark rejimi, ucret/slippage ve non-overlap mantigi kullanilir.",
+            "Aday sinyal havuzlari kurala gore farkli olabilir; tek seed ile karar verilmemelidir.",
+            "Seed 72, 73 ve 74 birlikte degerlendirilmelidir.",
         ],
     }
 
