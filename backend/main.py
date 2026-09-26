@@ -99,6 +99,22 @@ FILTERS_V73 = {
     "regime_score_min": 2,
 }
 
+# V7.3B is also EXPERIMENTAL ONLY.
+# It relaxes V7.3 just enough to avoid over-filtering while staying
+# more selective than V7.2. Live paper trading remains V7.2_FROZEN.
+FILTERS_V73B = {
+    "rsi_min": 43.0,
+    "rsi_max": 61.0,
+    "adx_min": 18.0,
+    "vol_ratio_min": 0.90,
+    "vol5_to_vol20_min": 0.95,
+    "dist_ema20_atr_min": -0.40,
+    "dist_ema20_atr_max": 0.85,
+    "atr_pct_min": 0.20,
+    "atr_pct_max": 4.00,
+    "regime_score_min": 1,
+}
+
 PAPER_CONFIG = {
     "fee_bps_each_side": 10.0,
     "slippage_bps_each_side": 5.0,
@@ -185,7 +201,7 @@ def load_state():
     state["symbols"] = PAPER_SYMBOLS
     state["total_universe"] = len(PAPER_SYMBOLS)
     state.setdefault("strategy", "V7.2_FROZEN")
-    state["version"] = "19.0.0"
+    state["version"] = "23.0.0"
     save_state(state)
     return state
 
@@ -483,6 +499,24 @@ def pullback_signal_v73(row, prev):
         and row["MACD_HIST"] > prev["MACD_HIST"]
         and row["Close"] > row["Open"]
     )
+
+def pullback_signal_v73b(row, prev):
+    """Balanced experimental filter set for historical validation only."""
+    return (
+        row["REGIME_SCORE"] >= FILTERS_V73B["regime_score_min"]
+        and trend_is_up(row)
+        and FILTERS_V73B["rsi_min"] <= row["RSI"] <= FILTERS_V73B["rsi_max"]
+        and row["ADX"] >= FILTERS_V73B["adx_min"]
+        and row["VOL_RATIO"] >= FILTERS_V73B["vol_ratio_min"]
+        and row["VOL5_TO_VOL20"] >= FILTERS_V73B["vol5_to_vol20_min"]
+        and FILTERS_V73B["atr_pct_min"] <= row["ATR_PCT"] <= FILTERS_V73B["atr_pct_max"]
+        and FILTERS_V73B["dist_ema20_atr_min"]
+            <= row["DIST_EMA20_ATR"]
+            <= FILTERS_V73B["dist_ema20_atr_max"]
+        and row["MACD_HIST"] > prev["MACD_HIST"]
+        and row["Close"] > row["Open"]
+    )
+
 
 
 def get_open_position(state, symbol):
@@ -1903,6 +1937,144 @@ def random_history_backtest_v73(
         "errors": errors,
         "notes": [
             "V7.3 sadece deneysel gecmis testidir; canli paper V7.2_FROZEN olarak kalir.",
+            "Sinyal kapanmis 1 saatlik mumda hesaplanir; giris bir sonraki mumun acilisidir.",
+            "Stop/hedef ayni mumda birlikte gorulurse konservatif olarak STOP once kabul edilir.",
+            "Komisyon ve slippage paper trading ile aynidir.",
+            "Bu endpoint gercek paper_state.json dosyasini degistirmez.",
+        ],
+    }
+
+
+@app.post("/backtest/random-history-v73b")
+def random_history_backtest_v73b(
+    tests: int = Query(100, ge=5, le=100),
+    symbol_count: int = Query(30, ge=3, le=50),
+    seed: int = Query(72, ge=0, le=999999),
+):
+    """
+    V7.3B experimental historical test.
+
+    Changes versus V7.3:
+    - balanced (less aggressive) filters,
+    - one non-overlapping simulated trade at a time per symbol,
+    - live paper trading remains V7.2_FROZEN.
+    """
+    rng = np.random.default_rng(seed)
+    symbols = list(PAPER_SYMBOLS)
+    if symbol_count < len(symbols):
+        selected = sorted(rng.choice(symbols, size=symbol_count, replace=False).tolist())
+    else:
+        selected = symbols
+
+    benchmark, regime = fetch_benchmark_daily()
+    candidates = []
+    errors = []
+    skipped_overlapping = 0
+
+    for symbol in selected:
+        try:
+            raw = fetch_data(symbol, "1h")
+            enriched = enrich(raw)
+            df = _attach_precomputed_regime(enriched, regime)
+            if len(df) < 5:
+                continue
+
+            # Match real paper behavior more closely: do not allow overlapping
+            # positions for the same symbol.
+            blocked_until = None
+
+            for i in range(1, len(df) - 1):
+                signal_ts = pd.Timestamp(df.index[i])
+
+                if blocked_until is not None and signal_ts <= blocked_until:
+                    skipped_overlapping += 1
+                    continue
+
+                if pullback_signal_v73b(df.iloc[i], df.iloc[i - 1]):
+                    trade = _simulate_historical_trade(df, i, symbol)
+                    if trade is not None:
+                        candidates.append(trade)
+                        try:
+                            blocked_until = pd.Timestamp(trade["exit_time"])
+                        except Exception:
+                            blocked_until = signal_ts
+        except Exception as e:
+            errors.append({"symbol": symbol, "message": str(e)})
+
+    if not candidates:
+        return {
+            "status": "ok",
+            "strategy": "V7.3B_EXPERIMENTAL",
+            "mode": "RANDOM_HISTORICAL_ISOLATED_NON_OVERLAP",
+            "real_paper_state_changed": False,
+            "seed": seed,
+            "benchmark": benchmark,
+            "timeframe": "1h",
+            "requested_tests": tests,
+            "selected_symbols": selected,
+            "candidate_signal_count": 0,
+            "sampled_trade_count": 0,
+            "skipped_overlapping_signals": skipped_overlapping,
+            "filters": FILTERS_V73B,
+            "trades": [],
+            "metrics": {},
+            "errors": errors,
+            "message": "Secilen sembollerde tamamlanmis tarihsel V7.3B sinyali bulunamadi.",
+        }
+
+    take = min(tests, len(candidates))
+    idxs = rng.choice(len(candidates), size=take, replace=False)
+    trades = [candidates[int(i)] for i in idxs]
+    trades.sort(key=lambda x: x["signal_time"])
+
+    returns = np.array([t["net_return_pct"] / 100.0 for t in trades], dtype=float)
+    wins = returns[returns > 0]
+    losses = returns[returns <= 0]
+    gp = float(wins.sum()) if len(wins) else 0.0
+    gl = abs(float(losses.sum())) if len(losses) else 0.0
+    pf = gp / gl if gl > 0 else None
+
+    equity = 1.0
+    peak = 1.0
+    max_dd = 0.0
+    for r in returns:
+        equity *= 1 + r
+        peak = max(peak, equity)
+        dd = equity / peak - 1.0
+        max_dd = min(max_dd, dd)
+
+    metrics = {
+        "closed_trades": int(len(trades)),
+        "wins": int((returns > 0).sum()),
+        "losses": int((returns <= 0).sum()),
+        "win_rate_pct": round(float((returns > 0).mean() * 100), 2),
+        "expectancy_pct_per_trade": round(float(returns.mean() * 100), 3),
+        "profit_factor": round(pf, 3) if pf is not None else None,
+        "total_compounded_return_pct": round((equity - 1) * 100, 2),
+        "max_drawdown_pct": round(max_dd * 100, 2),
+    }
+
+    return {
+        "status": "ok",
+        "strategy": "V7.3B_EXPERIMENTAL",
+        "mode": "RANDOM_HISTORICAL_ISOLATED_NON_OVERLAP",
+        "real_paper_state_changed": False,
+        "seed": seed,
+        "benchmark": benchmark,
+        "timeframe": "1h",
+        "requested_tests": tests,
+        "selected_symbols": selected,
+        "candidate_signal_count": len(candidates),
+        "sampled_trade_count": len(trades),
+        "skipped_overlapping_signals": skipped_overlapping,
+        "filters": FILTERS_V73B,
+        "config": PAPER_CONFIG,
+        "metrics": metrics,
+        "trades": trades,
+        "errors": errors,
+        "notes": [
+            "V7.3B sadece deneysel gecmis testidir; canli paper V7.2_FROZEN olarak kalir.",
+            "V7.3B ayni hissede onceki test islemi kapanmadan yeni test islemi acmaz.",
             "Sinyal kapanmis 1 saatlik mumda hesaplanir; giris bir sonraki mumun acilisidir.",
             "Stop/hedef ayni mumda birlikte gorulurse konservatif olarak STOP once kabul edilir.",
             "Komisyon ve slippage paper trading ile aynidir.",
